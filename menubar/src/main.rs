@@ -919,10 +919,13 @@ fn main() {
     {
         collect(add(&s.preset(PRESETS[index]), *tag, ""), *tag);
     }
-    collect(add(s.set_speed, TAG_SET_DIALOG, ""), TAG_SET_DIALOG);
+    // The custom entry belongs with the presets: it is the same kind of choice
+    // (a fixed speed), and placing it after the dialog put the tick one row
+    // below the entry the user had just used.
     let custom_item = add(&s.custom_message(0), TAG_CUSTOM, "");
     custom_item.setHidden(true);
     *controller.ivars().custom_item.borrow_mut() = Some(custom_item);
+    collect(add(s.set_speed, TAG_SET_DIALOG, ""), TAG_SET_DIALOG);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let login_entry = add(s.launch_at_login, TAG_LOGIN, "");
     *controller.ivars().login.borrow_mut() = Some(login_entry);
