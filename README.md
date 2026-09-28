@@ -70,6 +70,11 @@ tar xzf macfan-universal.tar.gz
 cd macfan-universal && ./install.sh
 ```
 
+The same release also carries the two binaries on their own
+(`macfan-<version>-macos-universal`, `rsmc-<version>-macos-universal`) and a
+`SHA256SUMS` file. GitHub does not preserve file modes for release assets, so a
+standalone download needs `chmod +x` first; the tarball keeps its modes.
+
 `install.sh` puts the binaries in `~/.local/bin` and prints the `PATH` line if
 that directory isn't on it yet.
 
