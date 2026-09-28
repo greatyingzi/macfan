@@ -30,8 +30,8 @@ use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSButton,
-    NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSTextField, NSVariableStatusItemLength, NSWindow, NSWindowDelegate,
+    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem, NSStatusBar,
+    NSStatusItem, NSTextField, NSVariableStatusItemLength, NSWindow, NSWindowDelegate,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -75,6 +75,8 @@ struct Ivars {
     settings: RefCell<Settings>,
     window: RefCell<Option<Retained<NSWindow>>>,
     checks: RefCell<Vec<Retained<NSButton>>>,
+    /// True when the status item carries a glyph, so the title can stay short.
+    compact_title: RefCell<bool>,
 }
 
 define_class!(
@@ -168,7 +170,7 @@ impl Controller {
 
     fn refresh(&self) {
         let s = self.strings();
-        let text = match status_line(s) {
+        let text = match status_line(s, *self.ivars().compact_title.borrow()) {
             Ok(line) => line,
             Err(err) => format!("{}: {err}", s.smc_unavailable),
         };
@@ -369,8 +371,26 @@ impl Controller {
     }
 }
 
-/// Compact title for the menu bar: "<rpm> rpm" (plus a bolt when forced).
-fn status_line(s: &Strings) -> Result<String, macfan::smc::Error> {
+/// Status item glyph: an SF Symbol, as a template image so it follows the menu
+/// bar's light/dark appearance. Falls back to nothing on systems whose symbol
+/// set predates `fanblades` (macOS 12).
+fn status_item_image() -> Option<Retained<NSImage>> {
+    for name in ["fanblades", "fanblades.fill", "wind"] {
+        let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str(name),
+            None,
+        );
+        if let Some(image) = image {
+            image.setTemplate(true);
+            return Some(image);
+        }
+    }
+    None
+}
+
+/// Title for the menu bar: "<rpm> rpm" (plus a bolt when forced), and just
+/// "<rpm>" when a glyph already says what the number is.
+fn status_line(s: &Strings, compact: bool) -> Result<String, macfan::smc::Error> {
     let smc = Smc::open()?;
     let fans = fan::read_fans(&smc)?;
     if fans.is_empty() {
@@ -379,9 +399,10 @@ fn status_line(s: &Strings) -> Result<String, macfan::smc::Error> {
     let speeds: Vec<String> = fans.iter().map(|f| format!("{:.0}", f.current)).collect();
     let forced = fans.iter().any(|f| f.forced);
     Ok(format!(
-        "{}{} rpm",
+        "{}{}{}",
         speeds.join("/"),
-        if forced { " ⚡" } else { "" }
+        if forced { " ⚡" } else { "" },
+        if compact { "" } else { " rpm" }
     ))
 }
 
@@ -512,7 +533,14 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     println!("selftest: language = {lang:?} ({})", lang.code());
     let supported: Vec<&str> = Lang::all().iter().map(|l| l.code()).collect();
     println!("selftest: supported languages = {supported:?}");
-    println!("selftest: status item title = {title:?}");
+    println!(
+        "selftest: status item glyph = {}, title = {title:?}",
+        if *controller.ivars().compact_title.borrow() {
+            "SF Symbol"
+        } else {
+            "none (text only)"
+        }
+    );
     println!(
         "selftest: menu items = {}, wired to an action = {wired}, ticked = {ticked}",
         labels.len()
@@ -698,9 +726,14 @@ fn main() {
 
     let status_bar = NSStatusBar::systemStatusBar();
     let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
+    let symbol = status_item_image();
     if let Some(button) = status_item.button(mtm) {
         button.setTitle(ns_string!("macfan"));
+        if let Some(image) = symbol.as_ref() {
+            button.setImage(Some(image));
+        }
     }
+    *controller.ivars().compact_title.borrow_mut() = symbol.is_some();
 
     let menu = NSMenu::new(mtm);
     for (index, line) in detail_lines(s).iter().enumerate() {

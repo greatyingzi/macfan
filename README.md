@@ -183,7 +183,31 @@ every language. A screenshot is not available to an agent shell (no
 screen-recording permission), and "it started without crashing" would not have
 proven the wiring.
 
-Packaging (`.app` bundle, DMG) and a Homebrew cask are not in place yet.
+### App bundle and DMG
+
+```sh
+menubar/scripts/make-app.sh          # -> dist/macfan.app   (ad-hoc signed)
+menubar/scripts/make-dmg.sh          # -> dist/macfan-0.1.0.dmg
+```
+
+The bundle is what makes the icon, the app menu name and the alert artwork
+correct: a bare binary inherits the terminal's icon and `NSAlert` has no app
+icon to show. `make-app.sh` also copies `macfan` and `rsmc` into
+`Contents/MacOS/`, which is where the GUI looks for the CLI it drives.
+
+The icon comes from `menubar/assets/icon.svg` (rendered master:
+`assets/icon-1024.png`, regenerate with `scripts/make-icon.py`). Geometry
+follows the Big Sur grid — 824x824 artwork on a 1024 canvas with a 185.5 corner
+radius, transparency outside — so it sits correctly next to stock icons. The
+glyph is deliberately simple (four thick petals and a hub on a blue gradient)
+so it survives 16 px.
+
+**Gatekeeper.** Without a Developer ID the bundle is only ad-hoc signed, so a
+downloaded copy is quarantined: the first launch needs right-click → Open, or
+`xattr -d com.apple.quarantine /Applications/macfan.app`. Building it locally
+avoids this entirely. (A Homebrew cask would also sidestep it.)
+
+A Homebrew cask is not published yet.
 
 ## How it works
 

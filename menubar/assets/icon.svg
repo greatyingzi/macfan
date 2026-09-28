@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024"
+     viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#63CDFB"/>
+      <stop offset="45%" stop-color="#2F7BE8"/>
+      <stop offset="100%" stop-color="#12408F"/>
+    </linearGradient>
+    <radialGradient id="sheen" cx="0.3" cy="0.16" r="0.62">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.34"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="clip">
+      <rect x="100.0" y="100.0" width="824.0" height="824.0"
+            rx="185.5" ry="185.5"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#clip)">
+    <rect x="100.0" y="100.0" width="824.0" height="824.0" fill="url(#bg)"/>
+    <rect x="100.0" y="100.0" width="824.0" height="824.0" fill="url(#sheen)"/>
+  </g>
+
+  <g stroke="#ffffff" stroke-width="112.0" stroke-linecap="round"
+     fill="none" stroke-opacity="0.96">
+      <path d="M 641.01 352.69 A 205.0 205.0 0 0 1 713.23 551.12"/>
+      <path d="M 671.31 641.01 A 205.0 205.0 0 0 1 472.88 713.23"/>
+      <path d="M 382.99 671.31 A 205.0 205.0 0 0 1 310.77 472.88"/>
+      <path d="M 352.69 382.99 A 205.0 205.0 0 0 1 551.12 310.77"/>
+  </g>
+  <circle cx="512.0" cy="512.0" r="80.0" fill="#ffffff"
+          fill-opacity="0.96"/>
+  <circle cx="512.0" cy="512.0" r="34.0" fill="#2059B4"/>
+</svg>

@@ -48,6 +48,25 @@ jobs:
           cargo build
           ./target/debug/macfan-menubar --selftest
 
+      - name: App bundle (icon, plist, bundled CLI)
+        run: |
+          cargo build --release
+          ( cd menubar && cargo build --release )
+          menubar/scripts/make-app.sh
+          plutil -lint dist/macfan.app/Contents/Info.plist
+          test -f dist/macfan.app/Contents/Resources/AppIcon.icns
+          rm -rf "$RUNNER_TEMP/AppIcon.iconset"
+          iconutil --convert iconset --output "$RUNNER_TEMP/AppIcon.iconset" \
+            dist/macfan.app/Contents/Resources/AppIcon.icns
+          test "$(ls "$RUNNER_TEMP/AppIcon.iconset" | wc -l | tr -d ' ')" = "10"
+          dist/macfan.app/Contents/MacOS/macfan --version
+          codesign --verify --strict dist/macfan.app
+
+      - name: DMG (mounts, holds the app)
+        run: |
+          menubar/scripts/make-dmg.sh
+          ls -l dist/*.dmg
+
       - name: Smoke test the binaries
         run: |
           ./dist/macfan --version
