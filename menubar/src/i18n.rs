@@ -8,9 +8,10 @@
 //! output is compared byte for byte against the classic `smc` tool.
 
 /// Languages the UI ships with.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Lang {
-    /// English
+    /// English (also the fallback for languages we do not translate)
+    #[default]
     En,
     /// Simplified Chinese
     ZhHans,

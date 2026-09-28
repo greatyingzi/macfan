@@ -63,12 +63,6 @@ struct Ivars {
     lang: RefCell<Lang>,
 }
 
-impl Default for Lang {
-    fn default() -> Self {
-        Lang::En
-    }
-}
-
 define_class!(
     // SAFETY: NSObject has no subclassing requirements and Controller does not
     // implement Drop.
