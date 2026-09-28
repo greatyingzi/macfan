@@ -1,0 +1,36 @@
+[package]
+name = "macfan"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "macOS SMC toolkit in Rust: AppleSMC client (rsmc) + fan control (macfan)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/greatyingzi/macfan"
+keywords = ["smc", "fan", "macos", "iokit", "temperature"]
+categories = ["command-line-utilities", "os::macos-apis"]
+readme = "README.md"
+
+[lib]
+name = "macfan"
+path = "src/lib.rs"
+
+[[bin]]
+name = "macfan"
+path = "src/bin/macfan.rs"
+
+[[bin]]
+name = "rsmc"
+path = "src/bin/rsmc.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# Shipped binaries: no unwinding, so no landing pads to carry around.
+[profile.dist]
+inherits = "release"
+panic = "abort"
