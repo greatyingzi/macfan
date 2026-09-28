@@ -1,0 +1,70 @@
+name: Release
+
+# Publishing a release is a tag push:
+#
+#   git tag -a v0.2.0 -m "macfan 0.2.0" && git push origin v0.2.0
+#
+# This builds universal (arm64 + x86_64) binaries from the tagged commit and
+# attaches them to the release, so the published binaries always match the tag.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build universal binaries
+        run: |
+          rustup target add x86_64-apple-darwin
+          cargo build --profile dist --target aarch64-apple-darwin
+          cargo build --profile dist --target x86_64-apple-darwin
+          mkdir -p dist
+          for b in macfan rsmc; do
+            lipo -create -output "dist/$b" \
+              "target/aarch64-apple-darwin/dist/$b" \
+              "target/x86_64-apple-darwin/dist/$b"
+            echo "  $b: $(lipo -archs dist/$b)"
+          done
+
+      - name: Smoke test
+        run: |
+          ./dist/macfan --version
+          ./dist/rsmc -v
+          ./dist/macfan --help > /dev/null
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p pkg/macfan-universal
+          cp dist/macfan dist/rsmc scripts/install.sh README.md LICENSE-MIT LICENSE-APACHE pkg/macfan-universal/
+          chmod +x pkg/macfan-universal/install.sh
+          ( cd pkg/macfan-universal && shasum -a 256 macfan rsmc > SHA256SUMS )
+          tar czf macfan-universal.tar.gz -C pkg macfan-universal
+          cp dist/macfan "macfan-${VERSION}-macos-universal"
+          cp dist/rsmc "rsmc-${VERSION}-macos-universal"
+          shasum -a 256 macfan-universal.tar.gz \
+            "macfan-${VERSION}-macos-universal" "rsmc-${VERSION}-macos-universal" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"
+          gh release view "$VERSION" >/dev/null 2>&1 || \
+            gh release create "$VERSION" --title "macfan $V" --generate-notes
+          gh release upload "$VERSION" --clobber \
+            macfan-universal.tar.gz \
+            "macfan-${V}-macos-universal" \
+            "rsmc-${V}-macos-universal" \
+            SHA256SUMS
+          gh release view "$VERSION" --json assets --jq '.assets[] | "  \(.name)  \(.size) bytes"'
