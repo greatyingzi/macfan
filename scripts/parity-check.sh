@@ -89,30 +89,38 @@ BEGIN {
 }' /dev/null
 
 # --- 4. re-verify every suspect by alternating reads -------------------------
+# A single-read comparison cannot tell a real difference from a live counter
+# that jitters: such a key mismatches on nearly every read. So read each
+# suspect ROUNDS times per tool and only call it a real difference when each
+# tool's readings are *stable* and the two values differ. Keys that keep moving
+# are reported as uncomparable instead of being quietly passed or failed.
 real=0
-transient=0
-last_real=""
+stable_same=0
+moving=0
 if [ -s "$TMP/suspect" ]; then
   while read -r key; do
     [ -n "$key" ] || continue
-    hits=0
+    : > "$TMP/ref_vals"; : > "$TMP/rs_vals"
     for _ in $(seq "$ROUNDS"); do
-      r=$("$REF" -k "$key" -r 2>&1 | sed 's/.*(bytes/(bytes/')
-      u=$("$RUST" -k "$key" -r 2>&1 | sed 's/.*(bytes/(bytes/')
-      if [ "$r" != "$u" ]; then
-        hits=$((hits + 1))
-        last_real="$key: ref=$r rust=$u"
-      fi
+      "$REF" -k "$key" -r 2>&1 | sed 's/.*(bytes/(bytes/' >> "$TMP/ref_vals"
+      "$RUST" -k "$key" -r 2>&1 | sed 's/.*(bytes/(bytes/' >> "$TMP/rs_vals"
     done
-    if [ "$hits" -eq "$ROUNDS" ]; then
+    n_ref=$(sort -u "$TMP/ref_vals" | wc -l | tr -d ' ')
+    n_rs=$(sort -u "$TMP/rs_vals" | wc -l | tr -d ' ')
+    ref_val=$(head -1 "$TMP/ref_vals")
+    rs_val=$(head -1 "$TMP/rs_vals")
+    if [ "$n_ref" -eq 1 ] && [ "$n_rs" -eq 1 ] && [ "$ref_val" != "$rs_val" ]; then
       real=$((real + 1))
-      echo "  [4/4] REAL DIFFERENCE      : $last_real (reproduced $hits/$ROUNDS rounds)"
+      echo "  [4/4] REAL DIFFERENCE      : $key ref=$ref_val rust=$rs_val (both stable over $ROUNDS reads)"
+    elif [ "$n_ref" -eq 1 ] && [ "$n_rs" -eq 1 ]; then
+      stable_same=$((stable_same + 1))
     else
-      transient=$((transient + 1))
+      moving=$((moving + 1))
+      echo "  [4/4] uncomparable         : $key moves while reading (ref $n_ref value(s), rust $n_rs) — not a tool difference"
     fi
   done < "$TMP/suspect"
 fi
-echo "  [4/4] re-verification    : $real reproducible, $transient transient (SMC drift)"
+echo "  [4/4] re-verification    : $real reproducible, $stable_same stable-and-equal, $moving moving/uncomparable"
 [ "$real" -eq 0 ] || unexpected=$((unexpected + real))
 
 echo

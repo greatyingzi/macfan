@@ -149,8 +149,8 @@ Parity work is in `scripts/parity-check.sh` (it runs the classic `smc` tool and
 ```
   [1/4] -f fan dump        : identical (8 lines)
   [2/4] -l key+type column : identical (1645 keys)
-  [3/4] -l payloads        : 1314 keys held still, 331 moved, 17 known deviations (4 si16 sign, 13 unreadable), 1 to re-verify
-  [4/4] re-verification    : 0 reproducible, 1 transient (SMC drift)
+  [3/4] -l payloads        : 1328 keys held still, 317 moved, 17 known deviations (4 si16 sign, 13 unreadable), 0 to re-verify
+  [4/4] re-verification    : 0 reproducible, 0 stable-and-equal, 0 moving/uncomparable
   PASS — no unexpected differences
 ```
 
@@ -160,10 +160,14 @@ What that means, and how it was measured:
 - **Key enumeration**: same 1645 keys in the same order, and the key + type
   columns are identical for all of them.
 - **Values**: only keys that hold still through the measurement window are
-  compared (the reference tool's two dumps bracket ours), and every remaining
-  mismatch is re-read alternately with both tools — a difference only counts if
-  it reproduces in all 5 rounds. Transient SMC drift otherwise shows up as
-  hundreds of false mismatches.
+  compared (the reference tool's two dumps bracket ours). Every remaining
+  mismatch is then re-read 5 times with each tool, and only counts as a real
+  difference when each tool's readings are themselves stable and the two values
+  differ. Both steps are needed: hundreds of keys drift between two dumps, and
+  keys like `aP70` — an internal counter that oscillates in a narrow band —
+  mismatch on virtually every single read without being a difference at all.
+  Anything that won't hold still is reported as uncomparable rather than being
+  quietly counted as a pass.
 - **Writes**: a real round trip was verified against the reference tool
   (`macfan set 3000` → `smc -f` reports target 3000 → `macfan max` restores the
   previous state), and idempotent writes were checked too.
