@@ -60,8 +60,10 @@ jobs:
         run: |
           set -euo pipefail
           V="${VERSION#v}"
+          PRERELEASE=""
+          case "$V" in *-*) PRERELEASE="--prerelease" ;; esac   # 0.2.0-rc1 etc.
           gh release view "$VERSION" >/dev/null 2>&1 || \
-            gh release create "$VERSION" --title "macfan $V" --generate-notes
+            gh release create "$VERSION" --title "macfan $V" --generate-notes $PRERELEASE
           gh release upload "$VERSION" --clobber \
             macfan-universal.tar.gz \
             "macfan-${V}-macos-universal" \
