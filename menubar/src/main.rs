@@ -58,6 +58,8 @@ const TAG_LOGIN: isize = 8;
 const TAG_REFRESH: isize = 9;
 const TAG_QUIT: isize = 10;
 const TAG_SETTINGS: isize = 11;
+const TAG_CUSTOM: isize = 12;
+const TAG_STATE: isize = 13;
 const TAG_INFO: isize = 99;
 
 // Settings window checkboxes.
@@ -77,6 +79,12 @@ struct Ivars {
     checks: RefCell<Vec<Retained<NSButton>>>,
     /// True when the status item carries a glyph, so the title can stay short.
     compact_title: RefCell<bool>,
+    /// Action items that take a tick when they match the current state.
+    actions: RefCell<Vec<(isize, Retained<NSMenuItem>)>>,
+    /// Item that shows a custom speed, hidden unless one is in force.
+    custom_item: RefCell<Option<Retained<NSMenuItem>>>,
+    /// The "current state" line at the top of the menu.
+    state_item: RefCell<Option<Retained<NSMenuItem>>>,
 }
 
 define_class!(
@@ -182,6 +190,7 @@ impl Controller {
         for (menu_item, line) in self.ivars().info.borrow().iter().zip(detail_lines(s)) {
             menu_item.setTitle(&NSString::from_str(&line));
         }
+        self.refresh_state_ticks();
         self.refresh_login_state();
     }
 
@@ -245,6 +254,62 @@ impl Controller {
 
         if let Err(err) = settings.save() {
             eprintln!("macfan-menubar: settings not saved: {err}");
+        }
+    }
+
+    /// Show which mode the fans are in: a status line plus a tick on the
+    /// matching entry (or a custom-speed entry when the value is not a preset).
+    fn refresh_state_ticks(&self) {
+        let s = self.strings();
+        let mode = current_mode(&read_fans_or_empty());
+
+        if let Some(item) = self.ivars().state_item.borrow().as_ref() {
+            let text = match mode {
+                Mode::Max => s.force_max.to_string(),
+                Mode::Min => s.force_min.to_string(),
+                Mode::Auto => s.automatic.to_string(),
+                Mode::Preset(rpm) => s.preset(rpm),
+                Mode::Custom(rpm) => s.custom_message(rpm),
+                Mode::Mixed => s.state_mixed.to_string(),
+            };
+            item.setTitle(&NSString::from_str(&format!("{}: {}", s.state_label, text)));
+        }
+
+        // The custom entry only exists when a non-preset speed is in force.
+        if let Some(item) = self.ivars().custom_item.borrow().as_ref() {
+            match mode {
+                Mode::Custom(rpm) => {
+                    item.setTitle(&NSString::from_str(&s.custom_message(rpm)));
+                    item.setHidden(false);
+                    item.setState(NSControlStateValueOn);
+                }
+                _ => {
+                    item.setHidden(true);
+                    item.setState(NSControlStateValueOff);
+                }
+            }
+        }
+
+        for (tag, item) in self.ivars().actions.borrow().iter() {
+            let on = match mode {
+                Mode::Auto => *tag == TAG_AUTO,
+                Mode::Max => *tag == TAG_MAX,
+                Mode::Min => *tag == TAG_MIN,
+                Mode::Preset(rpm) => {
+                    PRESETS
+                        .iter()
+                        .position(|p| *p == rpm)
+                        .map(|i| TAG_SET_3000 + i as isize)
+                        == Some(*tag)
+                }
+                Mode::Custom(_) => *tag == TAG_CUSTOM,
+                Mode::Mixed => false,
+            };
+            item.setState(if on {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
         }
     }
 
@@ -390,6 +455,54 @@ fn status_item_image() -> Option<Retained<NSImage>> {
 
 /// Title for the menu bar: "<rpm> rpm" (plus a bolt when forced), and just
 /// "<rpm>" when a glyph already says what the number is.
+/// What the fans are doing right now, as a menu state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Auto,
+    Max,
+    Min,
+    Preset(u32),
+    Custom(u32),
+    Mixed,
+}
+
+/// Presets offered in the menu, in display order.
+const PRESETS: [u32; 3] = [3000, 4500, 6000];
+
+/// Classify the current fan state so the menu can tick the matching entry.
+///
+/// Comparison is by value, not by "what was last clicked": if another tool (or
+/// the SMC itself) moves the fans, the ticks follow. One rpm of slack absorbs
+/// the SMC's rounding.
+fn current_mode(fans: &[fan::Fan]) -> Mode {
+    let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
+    if fans.is_empty() {
+        return Mode::Mixed;
+    }
+    if fans.iter().all(|f| !f.forced) {
+        return Mode::Auto;
+    }
+    if fans.iter().any(|f| !f.forced) {
+        return Mode::Mixed;
+    }
+    if fans.iter().all(|f| f.max > 0.0 && near(f.target, f.max)) {
+        return Mode::Max;
+    }
+    if fans.iter().all(|f| f.min > 0.0 && near(f.target, f.min)) {
+        return Mode::Min;
+    }
+    for preset in PRESETS {
+        if fans.iter().all(|f| near(f.target, f64::from(preset))) {
+            return Mode::Preset(preset);
+        }
+    }
+    let first = fans[0].target;
+    if fans.iter().all(|f| near(f.target, first)) && first > 0.0 {
+        return Mode::Custom(first.round() as u32);
+    }
+    Mode::Mixed
+}
+
 fn status_line(s: &Strings, compact: bool) -> Result<String, macfan::smc::Error> {
     let smc = Smc::open()?;
     let fans = fan::read_fans(&smc)?;
@@ -606,6 +719,17 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
             .iter()
             .all(|c| c.target().is_some() && c.action().is_some());
     let live = *controller.ivars().settings.borrow();
+    let ticked: Vec<String> = (0..labels.len())
+        .filter_map(|index| {
+            menu.itemAtIndex(index as isize)
+                .filter(|item| item.state() == NSControlStateValueOn && !item.isHidden())
+                .map(|_| labels[index].clone())
+        })
+        .collect();
+    println!(
+        "selftest: mode = {:?}, ticked = {ticked:?}",
+        current_mode(&read_fans_or_empty())
+    );
     println!(
         "selftest: settings window = {}, checkboxes = {} {check_titles:?}",
         if settings_window_ok { "ok" } else { "FAILED" },
@@ -736,6 +860,21 @@ fn main() {
     *controller.ivars().compact_title.borrow_mut() = symbol.is_some();
 
     let menu = NSMenu::new(mtm);
+
+    // "Current: ..." line, disabled so it reads as information.
+    let state_item = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(),
+            &NSString::from_str(s.state_label),
+            None,
+            ns_string!(""),
+        )
+    };
+    state_item.setTag(TAG_STATE);
+    state_item.setEnabled(false);
+    menu.addItem(&state_item);
+    *controller.ivars().state_item.borrow_mut() = Some(state_item);
+
     for (index, line) in detail_lines(s).iter().enumerate() {
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -767,18 +906,23 @@ fn main() {
         item
     };
 
-    add(s.force_max, TAG_MAX, "");
-    add(s.force_min, TAG_MIN, "");
-    add(s.automatic, TAG_AUTO, "");
+    let collect = |item: Retained<NSMenuItem>, tag: isize| {
+        controller.ivars().actions.borrow_mut().push((tag, item));
+    };
+    collect(add(s.force_max, TAG_MAX, ""), TAG_MAX);
+    collect(add(s.force_min, TAG_MIN, ""), TAG_MIN);
+    collect(add(s.automatic, TAG_AUTO, ""), TAG_AUTO);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add(s.set_speed, TAG_SET_DIALOG, "");
-    for (rpm, tag) in [
-        (3000u32, TAG_SET_3000),
-        (4500, TAG_SET_4500),
-        (6000, TAG_SET_6000),
-    ] {
-        add(&s.preset(rpm), tag, "");
+    for (index, tag) in [TAG_SET_3000, TAG_SET_4500, TAG_SET_6000]
+        .iter()
+        .enumerate()
+    {
+        collect(add(&s.preset(PRESETS[index]), *tag, ""), *tag);
     }
+    collect(add(s.set_speed, TAG_SET_DIALOG, ""), TAG_SET_DIALOG);
+    let custom_item = add(&s.custom_message(0), TAG_CUSTOM, "");
+    custom_item.setHidden(true);
+    *controller.ivars().custom_item.borrow_mut() = Some(custom_item);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let login_entry = add(s.launch_at_login, TAG_LOGIN, "");
     *controller.ivars().login.borrow_mut() = Some(login_entry);

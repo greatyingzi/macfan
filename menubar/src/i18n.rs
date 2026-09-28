@@ -109,6 +109,12 @@ pub struct Strings {
     pub start_minimized: &'static str,
     /// Note under the checkboxes.
     pub keep_one_visible: &'static str,
+    /// Prefix of the status line at the top of the menu.
+    pub state_label: &'static str,
+    /// Status / menu item for a speed that is not one of the presets.
+    pub state_custom: &'static str,
+    /// Status when the fans disagree (multi-fan, mixed modes).
+    pub state_mixed: &'static str,
     /// Menu item: re-read the fans.
     pub refresh: &'static str,
     /// Menu item: quit.
@@ -156,6 +162,9 @@ const EN: Strings = Strings {
     show_dock_icon: "Show Dock icon",
     start_minimized: "Start minimized (no window)",
     keep_one_visible: "At least one of the menu bar icon and the Dock icon stays visible.",
+    state_label: "Current",
+    state_custom: "Custom {rpm} rpm",
+    state_mixed: "Mixed (fans differ)",
     refresh: "Refresh",
     quit: "Quit",
     dialog_title: "Set fan speed",
@@ -187,6 +196,9 @@ const ZH_HANS: Strings = Strings {
     show_dock_icon: "显示 Dock 图标",
     start_minimized: "启动时最小化（不显示窗口）",
     keep_one_visible: "状态栏图标与 Dock 图标至少保留一个。",
+    state_label: "当前",
+    state_custom: "自定义 {rpm} rpm",
+    state_mixed: "混合状态（多个风扇不一致）",
     refresh: "刷新",
     quit: "退出",
     dialog_title: "设置风扇转速",
@@ -218,6 +230,9 @@ const ZH_HANT: Strings = Strings {
     show_dock_icon: "顯示 Dock 圖示",
     start_minimized: "啟動時最小化（不顯示視窗）",
     keep_one_visible: "狀態列圖示與 Dock 圖示至少保留一個。",
+    state_label: "目前",
+    state_custom: "自訂 {rpm} rpm",
+    state_mixed: "混合狀態（多個風扇不一致）",
     refresh: "重新整理",
     quit: "結束",
     dialog_title: "設定風扇轉速",
@@ -249,6 +264,9 @@ const JA: Strings = Strings {
     show_dock_icon: "Dock にアイコンを表示",
     start_minimized: "起動時に最小化（ウインドウを表示しない）",
     keep_one_visible: "メニューバーと Dock のアイコンは少なくとも一方を表示します。",
+    state_label: "現在",
+    state_custom: "カスタム {rpm} rpm",
+    state_mixed: "混在（ファンごとに異なる）",
     refresh: "更新",
     quit: "終了",
     dialog_title: "ファン回転数を設定",
@@ -310,6 +328,11 @@ impl Strings {
             .replace("{max}", &max.to_string())
     }
 
+    /// The status line for a custom speed.
+    pub fn custom_message(&self, rpm: u32) -> String {
+        self.state_custom.replace("{rpm}", &rpm.to_string())
+    }
+
     /// A login-agent error message.
     pub fn login_error_message(&self, err: &str) -> String {
         self.login_error.replace("{err}", err)
@@ -349,6 +372,9 @@ mod tests {
                 s.show_dock_icon,
                 s.start_minimized,
                 s.keep_one_visible,
+                s.state_label,
+                s.state_custom,
+                s.state_mixed,
                 s.refresh,
                 s.quit,
                 s.dialog_title,
