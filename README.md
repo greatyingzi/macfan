@@ -126,6 +126,34 @@ $ sudo rsmc -k F0Tg -w 00006042        # 56.0 rpm target, written by hand
 
 SMC keys are 4 characters, space padded (`FS!` works as well as `FS! `).
 
+## Menu bar app
+
+`menubar/` is a first-stage menu bar item built on the same library (AppKit
+through `objc2` — no Swift, no Xcode project, no Electron):
+
+```sh
+cargo run --manifest-path menubar/Cargo.toml
+```
+
+It shows the current speed in the status bar (`7199 ⚡ rpm` while a fan is under
+manual control), a live per-fan line at the top of the menu, and items for
+Force max / Force min / Automatic / Set 3000 / Set 4500 / Set 6000 / Refresh /
+Quit.
+
+Writes still need root. Inside the app: if it already runs as root, or
+`SUDO_PASSWORD` is set, it asks the `macfan` CLI to do the write (the CLI
+handles sudo itself); otherwise the write goes through
+`osascript … with administrator privileges`, so macOS shows its normal
+authorisation dialog. No privileged helper, no code signing, no daemon.
+
+`macfan-menubar --selftest` builds the whole UI on the main thread, reads it
+back and exits — status item title, menu item count, and how many items are
+wired to an action. That is how the AppKit wiring is verified here: an agent
+shell usually cannot get the screen-recording permission a screenshot would
+need, and a test that only checks "it didn't crash" would not prove anything.
+
+Packaging (`.app` bundle, DMG) and a Homebrew cask are not in place yet.
+
 ## How it works
 
 The SMC is reachable through the `AppleSMC` IOKit service. `rsmc` opens a

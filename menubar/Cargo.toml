@@ -1,0 +1,28 @@
+[package]
+name = "macfan-menubar"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Menu bar fan control for macOS, on top of the macfan library"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone workspace: this crate is a UI on top of the CLI crate next door and
+# keeps its own dependency set, so the CLI stays dependency-free.
+[workspace]
+
+[[bin]]
+name = "macfan-menubar"
+path = "src/main.rs"
+
+[dependencies]
+macfan = { path = ".." }
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

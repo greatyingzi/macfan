@@ -40,6 +40,14 @@ jobs:
             lipo -archs "dist/$b"
           done
 
+      - name: Menu bar app — build and wiring self test
+        working-directory: menubar
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo build
+          ./target/debug/macfan-menubar --selftest
+
       - name: Smoke test the binaries
         run: |
           ./dist/macfan --version

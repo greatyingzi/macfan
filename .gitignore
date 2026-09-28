@@ -1,4 +1,6 @@
-/target
+# Rust build output (any crate in the tree)
+target/
+**/target/
 **/*.rs.bk
 .DS_Store
 /dist
