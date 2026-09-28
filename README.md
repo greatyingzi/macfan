@@ -128,29 +128,60 @@ SMC keys are 4 characters, space padded (`FS!` works as well as `FS! `).
 
 ## Menu bar app
 
-`menubar/` is a first-stage menu bar item built on the same library (AppKit
-through `objc2` — no Swift, no Xcode project, no Electron):
+`menubar/` is a menu bar item built on the same library (AppKit through
+`objc2` — no Swift, no Xcode project, no Electron):
 
 ```sh
 cargo run --manifest-path menubar/Cargo.toml
 ```
 
-It shows the current speed in the status bar (`7199 ⚡ rpm` while a fan is under
-manual control), a live per-fan line at the top of the menu, and items for
-Force max / Force min / Automatic / Set 3000 / Set 4500 / Set 6000 / Refresh /
-Quit.
+The status bar shows the current speed (`7199 ⚡ rpm` while a fan is under manual
+control, every fan's speed on multi-fan Macs). The menu has a live line per fan,
+then:
 
-Writes still need root. Inside the app: if it already runs as root, or
-`SUDO_PASSWORD` is set, it asks the `macfan` CLI to do the write (the CLI
-handles sudo itself); otherwise the write goes through
+| menu item | what it does |
+|-----------|--------------|
+| Force maximum / minimum speed | force every fan to its own limit |
+| Automatic (system control) | hand the fans back to the system |
+| Set speed… | dialog with an input field, validated and clamped to the machine's range |
+| Set 3000 / 4500 / 6000 rpm | one-click presets |
+| Launch at login | tick to install a per-user LaunchAgent |
+| Refresh | re-read the fans now (otherwise every 2 s) |
+| Quit | |
+
+**Languages.** The UI follows the system language — English, 简体中文, 繁體中文
+and 日本語 ship today, anything else falls back to English. `MACFAN_LANG=zh-Hans`
+overrides it (useful in scripts and in the self test). The CLI stays English on
+purpose: its output is compared byte for byte against the classic `smc` tool.
+
+**Writes and privileges.** Writing to the SMC needs root. Inside the app: if it
+already runs as root, or `SUDO_PASSWORD` is set, it asks the `macfan` CLI to do
+the write (the CLI handles sudo itself); otherwise the write goes through
 `osascript … with administrator privileges`, so macOS shows its normal
-authorisation dialog. No privileged helper, no code signing, no daemon.
+authorisation dialog. No privileged helper, no code signing, no daemon. After
+the helper returns, the app re-reads the SMC and warns if the fans did not end
+up in the requested state — a write is asynchronous, so an exit code of 0 does
+not by itself mean it landed.
 
-`macfan-menubar --selftest` builds the whole UI on the main thread, reads it
-back and exits — status item title, menu item count, and how many items are
-wired to an action. That is how the AppKit wiring is verified here: an agent
-shell usually cannot get the screen-recording permission a screenshot would
-need, and a test that only checks "it didn't crash" would not prove anything.
+**Launch at login** writes `~/Library/LaunchAgents/com.macfan.menubar.plist`
+(validated with `plutil -lint`) and leaves it unloaded, so ticking the box does
+not spawn a second copy of the app on the spot; launchd picks it up at the next
+login. `SMAppService` would be the modern route, but it wants a signed bundle,
+so that can wait until there is one. The same thing is scriptable:
+
+```sh
+macfan-menubar --login-status    # installed / not installed
+macfan-menubar --login-install
+macfan-menubar --login-remove
+```
+
+**Verification.** `macfan-menubar --selftest` builds the whole UI on the main
+thread, reads it back and exits: status item title, menu items and how many are
+wired to an action, the launch-agent round trip in a throwaway directory, and
+the speed-input parsing and clamping. Combine it with `MACFAN_LANG` to check
+every language. A screenshot is not available to an agent shell (no
+screen-recording permission), and "it started without crashing" would not have
+proven the wiring.
 
 Packaging (`.app` bundle, DMG) and a Homebrew cask are not in place yet.
 

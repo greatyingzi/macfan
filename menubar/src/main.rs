@@ -11,8 +11,14 @@
 //! Otherwise the write is handed to `osascript` with administrator privileges,
 //! which shows the standard macOS authorisation dialog — no privileged helper
 //! and no code signing required.
+//!
+//! The UI follows the system language (see `i18n`); the CLI deliberately does
+//! not, because its output is compared byte for byte with the classic tool.
 
 #![allow(non_snake_case)]
+
+mod i18n;
+mod login_item;
 
 use std::cell::RefCell;
 use std::process::Command;
@@ -20,15 +26,19 @@ use std::process::Command;
 use objc2::rc::Retained;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSVariableStatusItemLength,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
+    NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
+    NSTextField, NSVariableStatusItemLength,
 };
 use objc2_foundation::{
-    ns_string, MainThreadMarker, NSObject, NSObjectProtocol, NSString, NSTimer,
+    ns_string, MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
+    NSTimer,
 };
 
 use macfan::fan::{self, Action};
 use macfan::smc::Smc;
+
+use i18n::{Lang, Strings};
 
 const REFRESH_SECONDS: f64 = 2.0;
 
@@ -36,17 +46,27 @@ const REFRESH_SECONDS: f64 = 2.0;
 const TAG_MAX: isize = 1;
 const TAG_MIN: isize = 2;
 const TAG_AUTO: isize = 3;
-const TAG_SET_3000: isize = 4;
-const TAG_SET_4500: isize = 5;
-const TAG_SET_6000: isize = 6;
-const TAG_REFRESH: isize = 7;
-const TAG_QUIT: isize = 8;
+const TAG_SET_DIALOG: isize = 4;
+const TAG_SET_3000: isize = 5;
+const TAG_SET_4500: isize = 6;
+const TAG_SET_6000: isize = 7;
+const TAG_LOGIN: isize = 8;
+const TAG_REFRESH: isize = 9;
+const TAG_QUIT: isize = 10;
 const TAG_INFO: isize = 99;
 
 #[derive(Default)]
 struct Ivars {
     item: RefCell<Option<Retained<NSStatusItem>>>,
     info: RefCell<Vec<Retained<NSMenuItem>>>,
+    login: RefCell<Option<Retained<NSMenuItem>>>,
+    lang: RefCell<Lang>,
+}
+
+impl Default for Lang {
+    fn default() -> Self {
+        Lang::En
+    }
 }
 
 define_class!(
@@ -68,9 +88,11 @@ define_class!(
                 TAG_MAX => self.write(Action::Max),
                 TAG_MIN => self.write(Action::Min),
                 TAG_AUTO => self.write(Action::Auto),
+                TAG_SET_DIALOG => self.prompt_for_speed(),
                 TAG_SET_3000 => self.write(Action::Set(3000)),
                 TAG_SET_4500 => self.write(Action::Set(4500)),
                 TAG_SET_6000 => self.write(Action::Set(6000)),
+                TAG_LOGIN => self.toggle_login(),
                 TAG_REFRESH => self.refresh(),
                 TAG_QUIT => {
                     let app = NSApplication::sharedApplication(self.mtm());
@@ -88,45 +110,150 @@ define_class!(
 );
 
 impl Controller {
+    fn strings(&self) -> &'static Strings {
+        i18n::strings(*self.ivars().lang.borrow())
+    }
+
     fn refresh(&self) {
-        let text = match status_line() {
+        let s = self.strings();
+        let text = match status_line(s) {
             Ok(line) => line,
-            Err(err) => format!("SMC: {err}"),
+            Err(err) => format!("{}: {err}", s.smc_unavailable),
         };
         if let Some(item) = self.ivars().item.borrow().as_ref() {
             if let Some(button) = item.button(self.mtm()) {
                 button.setTitle(&NSString::from_str(&text));
             }
         }
-        for (menu_item, line) in self.ivars().info.borrow().iter().zip(detail_lines()) {
+        for (menu_item, line) in self.ivars().info.borrow().iter().zip(detail_lines(s)) {
             menu_item.setTitle(&NSString::from_str(&line));
+        }
+        self.refresh_login_state();
+    }
+
+    /// Keep the "launch at login" tick in sync with what is on disk.
+    fn refresh_login_state(&self) {
+        if let Some(item) = self.ivars().login.borrow().as_ref() {
+            item.setState(if login_item::is_enabled() {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
         }
     }
 
     fn write(&self, action: Action) {
-        let arg = match action {
-            Action::Max => "max",
-            Action::Min => "min",
-            Action::Auto => "auto",
-            Action::Set(rpm) => return self.write_set(rpm),
-        };
-        run_cli(&[arg]);
-        self.refresh();
+        match action {
+            Action::Max => self.apply(action, &["max"]),
+            Action::Min => self.apply(action, &["min"]),
+            Action::Auto => self.apply(action, &["auto"]),
+            Action::Set(rpm) => self.write_set(rpm),
+        }
     }
 
     fn write_set(&self, rpm: u32) {
-        let rpm = rpm.to_string();
-        run_cli(&["set", &rpm]);
+        let arg = rpm.to_string();
+        self.apply(Action::Set(rpm), &["set", &arg]);
+    }
+
+    /// Run the command, then check the SMC actually followed: the write is
+    /// asynchronous, so "the helper exited 0" alone means very little.
+    fn apply(&self, action: Action, args: &[&str]) {
+        let before = read_fans_or_empty();
+        run_cli(args);
         self.refresh();
+        let after = read_fans_or_empty();
+        if !before.is_empty() && !after.is_empty() && !fan::satisfied(action, &before, &after) {
+            let s = self.strings();
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str(s.not_settled));
+            alert.addButtonWithTitle(&NSString::from_str(s.ok));
+            alert.runModal();
+        }
+    }
+
+    /// "Set speed…": ask for a number, sanity check it, then hand it to the CLI.
+    fn prompt_for_speed(&self) {
+        let s = self.strings();
+        let (min, max, current) = self.range_and_current();
+        let mtm = self.mtm();
+
+        let app = NSApplication::sharedApplication(mtm);
+        // `activate` is macOS 14+, this crate targets 11+, so keep the older
+        // call and accept the deprecation.
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+
+        let alert = NSAlert::new(mtm);
+        alert.setMessageText(&NSString::from_str(s.dialog_title));
+        alert.setInformativeText(&NSString::from_str(&s.speed_message(min, max)));
+
+        let field = NSTextField::new(mtm);
+        field.setFrame(NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(180.0, 24.0),
+        ));
+        field.setStringValue(&NSString::from_str(&current.to_string()));
+        alert.setAccessoryView(Some(&field));
+        alert.addButtonWithTitle(&NSString::from_str(s.ok));
+        alert.addButtonWithTitle(&NSString::from_str(s.cancel));
+
+        if alert.runModal() != NSAlertFirstButtonReturn {
+            return;
+        }
+        match parse_rpm(&field.stringValue().to_string(), min, max) {
+            Ok(rpm) => self.write_set(rpm),
+            Err(_) => {
+                let alert = NSAlert::new(mtm);
+                alert.setMessageText(&NSString::from_str(s.invalid_number));
+                alert.addButtonWithTitle(&NSString::from_str(s.ok));
+                alert.runModal();
+            }
+        }
+    }
+
+    /// First fan's range and current target, used to seed the speed dialog.
+    fn range_and_current(&self) -> (u32, u32, u32) {
+        let Ok(smc) = Smc::open() else {
+            return (0, 0, 0);
+        };
+        let Ok(fans) = fan::read_fans(&smc) else {
+            return (0, 0, 0);
+        };
+        match fans.first() {
+            Some(f) => (
+                f.min.max(0.0) as u32,
+                f.max.max(0.0) as u32,
+                f.target.max(0.0) as u32,
+            ),
+            None => (0, 0, 0),
+        }
+    }
+
+    /// Tick/untick "launch at login".
+    fn toggle_login(&self) {
+        let s = self.strings();
+        let result = if login_item::is_enabled() {
+            login_item::disable()
+        } else {
+            login_item::enable().map(|_| ())
+        };
+        if let Err(err) = result {
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str(&s.login_error_message(&err)));
+            alert.addButtonWithTitle(&NSString::from_str(s.ok));
+            alert.runModal();
+        }
+        self.refresh_login_state();
     }
 }
 
 /// Compact title for the menu bar: "<rpm> rpm" (plus a bolt when forced).
-fn status_line() -> Result<String, macfan::smc::Error> {
+fn status_line(s: &Strings) -> Result<String, macfan::smc::Error> {
     let smc = Smc::open()?;
     let fans = fan::read_fans(&smc)?;
     if fans.is_empty() {
-        return Ok("no fans".to_string());
+        return Ok(s.no_fans.to_string());
     }
     let speeds: Vec<String> = fans.iter().map(|f| format!("{:.0}", f.current)).collect();
     let forced = fans.iter().any(|f| f.forced);
@@ -138,24 +265,45 @@ fn status_line() -> Result<String, macfan::smc::Error> {
 }
 
 /// Detail lines shown at the top of the menu, one per fan.
-fn detail_lines() -> Vec<String> {
+fn detail_lines(s: &Strings) -> Vec<String> {
     let Ok(smc) = Smc::open() else {
-        return vec!["SMC unavailable".to_string()];
+        return vec![s.smc_unavailable.to_string()];
     };
     let Ok(fans) = fan::read_fans(&smc) else {
-        return vec!["SMC unavailable".to_string()];
+        return vec![s.smc_unavailable.to_string()];
     };
+    if fans.is_empty() {
+        return vec![s.no_fans.to_string()];
+    }
     fans.iter()
-        .map(|f| {
-            format!(
-                "Fan {}: {:.0} rpm (target {:.0}, {})",
-                f.index,
-                f.current,
-                f.target,
-                if f.forced { "forced" } else { "auto" }
-            )
-        })
+        .map(|f| s.fan_line(f.index, f.current, f.target, f.forced))
         .collect()
+}
+
+/// Parse what the user typed in the speed dialog.
+///
+/// The value is clamped to the machine's range, because a target outside
+/// `[min, max]` is not something the SMC will honour anyway — asking for 800 rpm
+/// on a fan whose floor is 1199 can only end at the floor.
+fn parse_rpm(input: &str, min: u32, max: u32) -> Result<u32, String> {
+    let value: u32 = input
+        .trim()
+        .parse()
+        .map_err(|_| format!("{input:?} is not a whole number"))?;
+    if value == 0 {
+        return Err("0 rpm is not a fan speed".to_string());
+    }
+    let low = min.max(1);
+    let high = if max >= low { max } else { u32::MAX };
+    Ok(value.clamp(low, high))
+}
+
+/// Fans as they are right now, or nothing if the SMC cannot be read.
+fn read_fans_or_empty() -> Vec<fan::Fan> {
+    let Ok(smc) = Smc::open() else {
+        return Vec::new();
+    };
+    fan::read_fans(&smc).unwrap_or_default()
 }
 
 /// Locate the macfan CLI: next to this executable first, then `macfan` on PATH.
@@ -182,7 +330,7 @@ fn run_cli(args: &[&str]) {
     let result = if root || unattended {
         Command::new(&cli).args(args).output()
     } else {
-        let mut command = format!("'{}'", cli.replace('\'', "'\\''"));
+        let mut command = shell_quote(&cli);
         for a in args {
             command.push(' ');
             command.push_str(&shell_quote(a));
@@ -215,7 +363,7 @@ extern "C" {
 /// Read back what we just built: proves the AppKit wiring without needing a
 /// screen recorder (which an agent shell typically cannot get).
 fn selftest(controller: &Controller, menu: &NSMenu) {
-    let items = menu.numberOfItems();
+    let lang = *controller.ivars().lang.borrow();
     let title = controller
         .ivars()
         .item
@@ -224,33 +372,141 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         .and_then(|i| i.button(controller.mtm()))
         .map(|b| b.title().to_string())
         .unwrap_or_default();
+
     let mut wired = 0;
     let mut labels = Vec::new();
-    for index in 0..items {
+    let mut ticked = 0;
+    for index in 0..menu.numberOfItems() {
         if let Some(item) = menu.itemAtIndex(index) {
             if item.target().is_some() && item.action().is_some() {
                 wired += 1;
             }
+            if item.state() == NSControlStateValueOn {
+                ticked += 1;
+            }
             labels.push(item.title().to_string());
         }
     }
-    println!("selftest: status item button title = {title:?}");
-    println!("selftest: menu items = {items}, wired to an action = {wired}");
+
+    println!("selftest: language = {lang:?} ({})", lang.code());
+    let supported: Vec<&str> = Lang::all().iter().map(|l| l.code()).collect();
+    println!("selftest: supported languages = {supported:?}");
+    println!("selftest: status item title = {title:?}");
+    println!(
+        "selftest: menu items = {}, wired to an action = {wired}, ticked = {ticked}",
+        labels.len()
+    );
     println!("selftest: labels = {labels:?}");
-    println!("selftest: refresh timer scheduled (fires every {REFRESH_SECONDS}s)");
-    let ok = !title.is_empty() && items >= 10 && wired >= 8;
+
+    // Launch-at-login plumbing, exercised in a throwaway directory.
+    let dir = std::env::temp_dir().join(format!("macfan-selftest-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::env::set_var("MACFAN_AGENT_DIR", &dir);
+    let login_ok = match login_item::enable() {
+        Ok(path) => {
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            let ok = login_item::is_enabled()
+                && text.contains("com.macfan.menubar")
+                && text.contains("<key>RunAtLoad</key>")
+                && login_item::disable().is_ok()
+                && !login_item::is_enabled();
+            println!(
+                "selftest: launch agent round trip = {}",
+                if ok { "ok" } else { "FAILED" }
+            );
+            ok
+        }
+        Err(err) => {
+            println!("selftest: launch agent round trip = FAILED ({err})");
+            false
+        }
+    };
+    std::env::remove_var("MACFAN_AGENT_DIR");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Speed parsing / clamping.
+    let cases = [
+        ("4500", 1199, 7199, Some(4500)),
+        (" 3000 ", 1199, 7199, Some(3000)),
+        ("99999", 1199, 7199, Some(7199)),
+        ("800", 1199, 7199, Some(1199)),
+        ("abc", 1199, 7199, None),
+        ("0", 1199, 7199, None),
+        ("-200", 1199, 7199, None),
+    ];
+    let mut passed = 0;
+    for (input, min, max, expected) in cases {
+        if parse_rpm(input, min, max).ok() == expected {
+            passed += 1;
+        } else {
+            println!(
+                "selftest: parse_rpm({input:?}) = {:?}, expected {expected:?}",
+                parse_rpm(input, min, max)
+            );
+        }
+    }
+    let parse_ok = passed == cases.len();
+    println!("selftest: parse_rpm = {passed}/{} cases", cases.len());
+
+    let ok = !title.is_empty() && labels.len() >= 14 && wired >= 10 && login_ok && parse_ok;
     println!("selftest: {}", if ok { "PASS" } else { "FAIL" });
     std::process::exit(if ok { 0 } else { 1 });
 }
 
+/// `--login-status|--login-install|--login-remove`: control the login agent
+/// from the command line (used by tests, and handy in a setup script).
+fn login_item_command(args: &[String]) -> Option<i32> {
+    let action = args.iter().find(|a| a.starts_with("--login-"))?;
+    let result = match action.as_str() {
+        "--login-status" => {
+            let path = login_item::plist_path();
+            println!(
+                "login agent: {} ({})",
+                if login_item::is_enabled() {
+                    "installed"
+                } else {
+                    "not installed"
+                },
+                path.display()
+            );
+            return Some(0);
+        }
+        "--login-install" => login_item::enable().map(|path| {
+            println!("login agent installed: {}", path.display());
+        }),
+        "--login-remove" => login_item::disable().map(|()| {
+            println!("login agent removed");
+        }),
+        _ => return None,
+    };
+    Some(match result {
+        Ok(()) => 0,
+        Err(err) => {
+            eprintln!("login agent: {err}");
+            1
+        }
+    })
+}
+
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = login_item_command(&args) {
+        std::process::exit(code);
+    }
+
     let mtm = MainThreadMarker::new().expect("menu bar apps start on the main thread");
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 
+    let lang = Lang::detect();
+    let s = i18n::strings(lang);
+
     let controller: Retained<Controller> = {
         let this = mtm.alloc::<Controller>();
-        let this = this.set_ivars(Ivars::default());
+        let this = this.set_ivars(Ivars {
+            lang: RefCell::new(lang),
+            ..Ivars::default()
+        });
         unsafe { msg_send![super(this), init] }
     };
 
@@ -261,9 +517,7 @@ fn main() {
     }
 
     let menu = NSMenu::new(mtm);
-    let menu = Retained::into_raw(menu);
-    let menu: Retained<NSMenu> = unsafe { Retained::from_raw(menu).unwrap() };
-    for (index, line) in detail_lines().iter().enumerate() {
+    for (index, line) in detail_lines(s).iter().enumerate() {
         let item = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
                 mtm.alloc(),
@@ -291,17 +545,27 @@ fn main() {
         item.setTag(tag);
         unsafe { item.setTarget(Some(&controller)) };
         menu.addItem(&item);
+        item
     };
-    add("Force max", TAG_MAX, "");
-    add("Force min", TAG_MIN, "");
-    add("Automatic", TAG_AUTO, "");
+
+    add(s.force_max, TAG_MAX, "");
+    add(s.force_min, TAG_MIN, "");
+    add(s.automatic, TAG_AUTO, "");
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add("Set 3000 rpm", TAG_SET_3000, "");
-    add("Set 4500 rpm", TAG_SET_4500, "");
-    add("Set 6000 rpm", TAG_SET_6000, "");
+    add(s.set_speed, TAG_SET_DIALOG, "");
+    for (rpm, tag) in [
+        (3000u32, TAG_SET_3000),
+        (4500, TAG_SET_4500),
+        (6000, TAG_SET_6000),
+    ] {
+        add(&s.preset(rpm), tag, "");
+    }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
-    add("Refresh", TAG_REFRESH, "r");
-    add("Quit", TAG_QUIT, "q");
+    let login_entry = add(s.launch_at_login, TAG_LOGIN, "");
+    *controller.ivars().login.borrow_mut() = Some(login_entry);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add(s.refresh, TAG_REFRESH, "r");
+    add(s.quit, TAG_QUIT, "q");
 
     status_item.setMenu(Some(&menu));
     *controller.ivars().item.borrow_mut() = Some(status_item);
@@ -322,7 +586,43 @@ fn main() {
             true,
         );
     }
-    controller.refresh();
 
     app.run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_quoting_survives_awkward_paths() {
+        assert_eq!(
+            shell_quote("/usr/local/bin/macfan"),
+            "'/usr/local/bin/macfan'"
+        );
+        assert_eq!(
+            shell_quote("/Applications/Mac Fan.app/macfan"),
+            "'/Applications/Mac Fan.app/macfan'"
+        );
+        // A quote in the path must not end the quoted string.
+        assert_eq!(shell_quote("/tmp/it's here"), "'/tmp/it'\\''s here'");
+    }
+
+    #[test]
+    fn speed_input_is_validated_and_clamped() {
+        assert_eq!(parse_rpm("4500", 1199, 7199), Ok(4500));
+        assert_eq!(parse_rpm("  3000  ", 1199, 7199), Ok(3000));
+        // Above the fan's ceiling: clamp down.
+        assert_eq!(parse_rpm("99999", 1199, 7199), Ok(7199));
+        // Below the floor: clamp up.
+        assert_eq!(parse_rpm("800", 1199, 7199), Ok(1199));
+        // Never acceptable.
+        assert!(parse_rpm("", 1199, 7199).is_err());
+        assert!(parse_rpm("abc", 1199, 7199).is_err());
+        assert!(parse_rpm("0", 1199, 7199).is_err());
+        assert!(parse_rpm("-200", 1199, 7199).is_err());
+        assert!(parse_rpm("45.5", 1199, 7199).is_err());
+        // Unknown range (SMC gave us nothing): only the zero check applies.
+        assert_eq!(parse_rpm("4500", 0, 0), Ok(4500));
+    }
 }

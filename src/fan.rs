@@ -212,6 +212,19 @@ fn satisfies_with(action: Action, after: &Fan, before: &Fan) -> bool {
     }
 }
 
+/// Did the fans end up where `action` asked, given where they started?
+///
+/// Shared by the CLI (which polls with it) and the menu bar app (which checks
+/// once after the helper has run).
+pub fn satisfied(action: Action, before: &[Fan], after: &[Fan]) -> bool {
+    !after.is_empty()
+        && before.iter().all(|b| {
+            after
+                .get(b.index)
+                .is_some_and(|a| satisfies_with(action, a, b))
+        })
+}
+
 /// Read the fans back until they show what the action asked for.
 ///
 /// The SMC applies a target-speed write a moment later (a few hundred
@@ -226,12 +239,7 @@ pub fn wait_until_settled(
     let deadline = std::time::Instant::now() + timeout;
     let mut latest = read_fans(smc).unwrap_or_default();
     loop {
-        let settled = !latest.is_empty()
-            && before.iter().all(|b| {
-                latest
-                    .get(b.index)
-                    .is_some_and(|f| satisfies_with(action, f, b))
-            });
+        let settled = satisfied(action, before, &latest);
         if settled || std::time::Instant::now() >= deadline {
             return (latest, settled);
         }
@@ -400,6 +408,29 @@ mod tests {
             render(&fans),
             "Total fans in system: 1\n\nFan #0:\n    Current speed : 7165\n    Minimum speed: 1199\n    Maximum speed: 7199\n    Safe speed   : 0\n    Target speed : 7199\n    Mode         : forced\n"
         );
+    }
+
+    #[test]
+    fn satisfied_compares_before_and_after_snapshots() {
+        let before = two_fans();
+        let mut after = before.clone();
+        // Still under system control: the write has not landed.
+        assert!(!satisfied(Action::Max, &before, &after));
+        for fan in after.iter_mut() {
+            fan.forced = true;
+            fan.target = fan.max;
+        }
+        assert!(satisfied(Action::Max, &before, &after));
+        // A capped Set is judged against each fan's own maximum.
+        assert!(satisfied(Action::Set(99999), &before, &after));
+        // Auto only cares about the mode.
+        assert!(!satisfied(Action::Auto, &before, &after));
+        for fan in after.iter_mut() {
+            fan.forced = false;
+        }
+        assert!(satisfied(Action::Auto, &before, &after));
+        // An empty reading is never "satisfied".
+        assert!(!satisfied(Action::Auto, &before, &[]));
     }
 
     #[test]
