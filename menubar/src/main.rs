@@ -19,16 +19,19 @@
 
 mod i18n;
 mod login_item;
+mod settings;
+mod window;
 
 use std::cell::RefCell;
 use std::process::Command;
 
 use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSButton,
     NSControlStateValueOff, NSControlStateValueOn, NSMenu, NSMenuItem, NSStatusBar, NSStatusItem,
-    NSTextField, NSVariableStatusItemLength,
+    NSTextField, NSVariableStatusItemLength, NSWindow, NSWindowDelegate,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -39,6 +42,7 @@ use macfan::fan::{self, Action};
 use macfan::smc::Smc;
 
 use i18n::{Lang, Strings};
+use settings::Settings;
 
 const REFRESH_SECONDS: f64 = 2.0;
 
@@ -53,7 +57,14 @@ const TAG_SET_6000: isize = 7;
 const TAG_LOGIN: isize = 8;
 const TAG_REFRESH: isize = 9;
 const TAG_QUIT: isize = 10;
+const TAG_SETTINGS: isize = 11;
 const TAG_INFO: isize = 99;
+
+// Settings window checkboxes.
+const TAG_SET_STATUS_ITEM: isize = 20;
+const TAG_SET_DOCK_ICON: isize = 21;
+const TAG_SET_LAUNCH_LOGIN: isize = 22;
+const TAG_SET_START_MINIMIZED: isize = 23;
 
 #[derive(Default)]
 struct Ivars {
@@ -61,6 +72,9 @@ struct Ivars {
     info: RefCell<Vec<Retained<NSMenuItem>>>,
     login: RefCell<Option<Retained<NSMenuItem>>>,
     lang: RefCell<Lang>,
+    settings: RefCell<Settings>,
+    window: RefCell<Option<Retained<NSWindow>>>,
+    checks: RefCell<Vec<Retained<NSButton>>>,
 }
 
 define_class!(
@@ -73,6 +87,16 @@ define_class!(
 
     // SAFETY: NSObjectProtocol has no safety requirements.
     unsafe impl NSObjectProtocol for Controller {}
+
+    // SAFETY: NSWindowDelegate has no safety requirements.
+    unsafe impl NSWindowDelegate for Controller {
+        #[unsafe(method(windowShouldClose:))]
+        fn window_should_close(&self, _sender: &NSWindow) -> bool {
+            // Closing the window hides it; the app keeps running in the menu bar.
+            self.hide_window();
+            false
+        }
+    }
 
     impl Controller {
         #[unsafe(method(handleAction:))]
@@ -87,6 +111,7 @@ define_class!(
                 TAG_SET_4500 => self.write(Action::Set(4500)),
                 TAG_SET_6000 => self.write(Action::Set(6000)),
                 TAG_LOGIN => self.toggle_login(),
+                TAG_SETTINGS => self.show_window(),
                 TAG_REFRESH => self.refresh(),
                 TAG_QUIT => {
                     let app = NSApplication::sharedApplication(self.mtm());
@@ -94,6 +119,39 @@ define_class!(
                 }
                 _ => {}
             }
+        }
+
+        #[unsafe(method(toggleSetting:))]
+        fn toggle_setting(&self, sender: Option<&NSButton>) {
+            let Some(sender) = sender else { return };
+            let tag = sender.tag();
+            let on = sender.state() == NSControlStateValueOn;
+            {
+                let mut settings = self.ivars().settings.borrow_mut();
+                match tag {
+                    TAG_SET_STATUS_ITEM => settings.show_status_item = on,
+                    TAG_SET_DOCK_ICON => settings.show_dock_icon = on,
+                    TAG_SET_LAUNCH_LOGIN => {
+                        // Derived from the plist, not stored: this one is not a
+                        // preference, it is the login agent's existence.
+                        let result = if on {
+                            login_item::enable().map(|_| ())
+                        } else {
+                            login_item::disable()
+                        };
+                        if let Err(err) = result {
+                            let s = self.strings();
+                            let alert = NSAlert::new(self.mtm());
+                            alert.setMessageText(&NSString::from_str(&s.login_error_message(&err)));
+                            alert.addButtonWithTitle(&NSString::from_str(s.ok));
+                            alert.runModal();
+                        }
+                    }
+                    TAG_SET_START_MINIMIZED => settings.start_minimized = on,
+                    _ => return,
+                }
+            }
+            self.apply_settings();
         }
 
         #[unsafe(method(refreshTimer:))]
@@ -125,14 +183,83 @@ impl Controller {
         self.refresh_login_state();
     }
 
-    /// Keep the "launch at login" tick in sync with what is on disk.
-    fn refresh_login_state(&self) {
-        if let Some(item) = self.ivars().login.borrow().as_ref() {
-            item.setState(if login_item::is_enabled() {
+    /// Show the settings window (and bring the app forward so it is usable).
+    fn show_window(&self) {
+        let mtm = self.mtm();
+        let app = NSApplication::sharedApplication(mtm);
+        #[allow(deprecated)]
+        app.activateIgnoringOtherApps(true);
+        if let Some(window) = self.ivars().window.borrow().as_ref() {
+            window.makeKeyAndOrderFront(None);
+        }
+    }
+
+    /// Hide the settings window without quitting.
+    fn hide_window(&self) {
+        if let Some(window) = self.ivars().window.borrow().as_ref() {
+            window.orderOut(None);
+        }
+    }
+
+    /// Push the current settings into the running app and persist them.
+    fn apply_settings(&self) {
+        let mut settings = *self.ivars().settings.borrow();
+        if settings.normalise() {
+            // Hiding every entry point would leave no way back in; the checkbox
+            // state below gets corrected to match.
+            let alert = NSAlert::new(self.mtm());
+            let s = self.strings();
+            alert.setMessageText(&NSString::from_str(s.keep_one_visible));
+            alert.addButtonWithTitle(&NSString::from_str(s.ok));
+            alert.runModal();
+        }
+        *self.ivars().settings.borrow_mut() = settings;
+
+        let app = NSApplication::sharedApplication(self.mtm());
+        app.setActivationPolicy(if settings.show_dock_icon {
+            NSApplicationActivationPolicy::Regular
+        } else {
+            NSApplicationActivationPolicy::Accessory
+        });
+
+        if let Some(item) = self.ivars().item.borrow().as_ref() {
+            item.setVisible(settings.show_status_item);
+        }
+
+        for check in self.ivars().checks.borrow().iter() {
+            let on = match check.tag() {
+                TAG_SET_STATUS_ITEM => settings.show_status_item,
+                TAG_SET_DOCK_ICON => settings.show_dock_icon,
+                TAG_SET_LAUNCH_LOGIN => login_item::is_enabled(),
+                TAG_SET_START_MINIMIZED => settings.start_minimized,
+                _ => continue,
+            };
+            check.setState(if on {
                 NSControlStateValueOn
             } else {
                 NSControlStateValueOff
             });
+        }
+
+        if let Err(err) = settings.save() {
+            eprintln!("macfan-menubar: settings not saved: {err}");
+        }
+    }
+
+    /// Keep the "launch at login" menu tick in sync with what is on disk.
+    fn refresh_login_state(&self) {
+        let state = if login_item::is_enabled() {
+            NSControlStateValueOn
+        } else {
+            NSControlStateValueOff
+        };
+        if let Some(item) = self.ivars().login.borrow().as_ref() {
+            item.setState(state);
+        }
+        for check in self.ivars().checks.borrow().iter() {
+            if check.tag() == TAG_SET_LAUNCH_LOGIN {
+                check.setState(state);
+            }
         }
     }
 
@@ -442,7 +569,60 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     let parse_ok = passed == cases.len();
     println!("selftest: parse_rpm = {passed}/{} cases", cases.len());
 
-    let ok = !title.is_empty() && labels.len() >= 14 && wired >= 10 && login_ok && parse_ok;
+    // Settings window: four checkboxes, wired to the four settings.
+    let checks = controller.ivars().checks.borrow();
+    let check_titles: Vec<String> = checks.iter().map(|c| c.title().to_string()).collect();
+    let settings_window_ok = controller.ivars().window.borrow().is_some()
+        && checks.len() == 4
+        && checks
+            .iter()
+            .all(|c| c.target().is_some() && c.action().is_some());
+    let live = *controller.ivars().settings.borrow();
+    println!(
+        "selftest: settings window = {}, checkboxes = {} {check_titles:?}",
+        if settings_window_ok { "ok" } else { "FAILED" },
+        checks.len()
+    );
+    println!(
+        "selftest: settings = status_item={} dock_icon={} start_minimized={}",
+        live.show_status_item, live.show_dock_icon, live.start_minimized
+    );
+
+    // Settings file round trip, again in a throwaway location.
+    let settings_file = std::env::temp_dir().join(format!(
+        "macfan-settings-selftest-{}.conf",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&settings_file);
+    std::env::set_var("MACFAN_SETTINGS", &settings_file);
+    let wanted = Settings {
+        show_status_item: false,
+        show_dock_icon: true,
+        start_minimized: true,
+    };
+    let settings_ok = wanted.save().is_ok() && Settings::load() == wanted;
+    let mut both_hidden = Settings {
+        show_status_item: false,
+        show_dock_icon: false,
+        start_minimized: false,
+    };
+    let guard_ok = both_hidden.normalise() && both_hidden.show_status_item;
+    println!(
+        "selftest: settings file round trip = {}, hide-everything guard = {}",
+        if settings_ok { "ok" } else { "FAILED" },
+        if guard_ok { "ok" } else { "FAILED" }
+    );
+    std::env::remove_var("MACFAN_SETTINGS");
+    let _ = std::fs::remove_file(&settings_file);
+
+    let ok = !title.is_empty()
+        && labels.len() >= 15
+        && wired >= 11
+        && login_ok
+        && parse_ok
+        && settings_window_ok
+        && settings_ok
+        && guard_ok;
     println!("selftest: {}", if ok { "PASS" } else { "FAIL" });
     std::process::exit(if ok { 0 } else { 1 });
 }
@@ -494,15 +674,27 @@ fn main() {
 
     let lang = Lang::detect();
     let s = i18n::strings(lang);
+    let settings = Settings::load();
+    let start_minimized = settings.start_minimized || args.iter().any(|a| a == "--minimized");
 
     let controller: Retained<Controller> = {
         let this = mtm.alloc::<Controller>();
         let this = this.set_ivars(Ivars {
             lang: RefCell::new(lang),
+            settings: RefCell::new(settings),
             ..Ivars::default()
         });
         unsafe { msg_send![super(this), init] }
     };
+
+    let settings_window = window::build(mtm, s, &*controller);
+    {
+        let delegate: &ProtocolObject<dyn NSWindowDelegate> =
+            ProtocolObject::from_ref(&*controller);
+        settings_window.window.setDelegate(Some(delegate));
+    }
+    *controller.ivars().window.borrow_mut() = Some(settings_window.window);
+    *controller.ivars().checks.borrow_mut() = settings_window.checks;
 
     let status_bar = NSStatusBar::systemStatusBar();
     let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
@@ -558,17 +750,23 @@ fn main() {
     let login_entry = add(s.launch_at_login, TAG_LOGIN, "");
     *controller.ivars().login.borrow_mut() = Some(login_entry);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
+    add(s.settings_menu, TAG_SETTINGS, ",");
     add(s.refresh, TAG_REFRESH, "r");
     add(s.quit, TAG_QUIT, "q");
 
     status_item.setMenu(Some(&menu));
     *controller.ivars().item.borrow_mut() = Some(status_item);
 
+    controller.apply_settings();
     controller.refresh();
 
     if std::env::args().any(|a| a == "--selftest") {
         selftest(&controller, &menu);
         return;
+    }
+
+    if !start_minimized {
+        controller.show_window();
     }
 
     unsafe {
