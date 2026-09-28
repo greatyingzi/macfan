@@ -202,12 +202,28 @@ radius, transparency outside — so it sits correctly next to stock icons. The
 glyph is deliberately simple (four thick petals and a hub on a blue gradient)
 so it survives 16 px.
 
-**Gatekeeper.** Without a Developer ID the bundle is only ad-hoc signed, so a
-downloaded copy is quarantined: the first launch needs right-click → Open, or
-`xattr -d com.apple.quarantine /Applications/macfan.app`. Building it locally
-avoids this entirely. (A Homebrew cask would also sidestep it.)
+**Installing.** Drag `macfan.app` into `/Applications`. That location matters:
+Launchpad indexes `/Applications` and `~/Applications`, not the folder you
+unpacked the DMG in, so an app left in `~/Downloads` will not show up there.
 
-A Homebrew cask is not published yet.
+**Gatekeeper.** Without a Developer ID the bundle is only ad-hoc signed, so a
+downloaded copy carries the quarantine flag and macOS refuses the first launch.
+Measured on macOS 15: launching a quarantined copy does nothing at all; after
+clearing the flag it starts normally. Clear it once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/macfan.app
+open /Applications/macfan.app
+```
+
+The `-r` matters: the flag also sits on the binaries inside the bundle, and
+clearing it from the `.app` directory alone is not enough. The GUI equivalent is
+right-click → Open, and if macOS only offers "Done" then System Settings →
+Privacy & Security → "Open Anyway". A build from source never gets the flag at
+all. The DMG carries an install note with these same steps.
+
+A Homebrew cask would remove that step entirely (brew strips the flag); it is
+not published yet.
 
 ## How it works
 

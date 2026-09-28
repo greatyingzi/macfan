@@ -39,6 +39,14 @@ jobs:
           ./dist/rsmc -v
           ./dist/macfan --help > /dev/null
 
+      - name: App bundle and DMG
+        run: |
+          cargo build --release
+          ( cd menubar && cargo build --release )
+          menubar/scripts/make-app.sh
+          menubar/scripts/make-dmg.sh
+          lipo -archs dist/macfan.app/Contents/MacOS/macfan-menubar
+
       - name: Package
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -49,7 +57,8 @@ jobs:
           tar czf macfan-universal.tar.gz -C pkg macfan-universal
           cp dist/macfan "macfan-${VERSION}-macos-universal"
           cp dist/rsmc "rsmc-${VERSION}-macos-universal"
-          shasum -a 256 macfan-universal.tar.gz \
+          cp "dist/macfan-${VERSION}.dmg" "macfan-${VERSION}.dmg"
+          shasum -a 256 macfan-universal.tar.gz "macfan-${VERSION}.dmg" \
             "macfan-${VERSION}-macos-universal" "rsmc-${VERSION}-macos-universal" > SHA256SUMS
           cat SHA256SUMS
 
@@ -66,6 +75,7 @@ jobs:
             gh release create "$VERSION" --title "macfan $V" --generate-notes $PRERELEASE
           gh release upload "$VERSION" --clobber \
             macfan-universal.tar.gz \
+            "macfan-${V}.dmg" \
             "macfan-${V}-macos-universal" \
             "rsmc-${V}-macos-universal" \
             SHA256SUMS
