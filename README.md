@@ -149,6 +149,14 @@ then:
 | Refresh | re-read the fans now (otherwise every 2 s) |
 | Quit | |
 
+The menu also says **which mode is in force**: a `Current: …` line at the top,
+a tick on the matching entry (automatic, maximum, minimum, or a preset), and a
+`Custom <rpm> rpm` entry when the speed in force is not one of the presets. The
+ticks come from the measured state — every fan's target compared against its
+own limits — not from the last click, so if another tool or the SMC itself moves
+the fans, the menu follows within its two-second refresh. Fans that end up with
+different targets report a mixed state instead of pretending.
+
 **Languages.** The UI follows the system language — English, 简体中文, 繁體中文
 and 日本語 ship today, anything else falls back to English. `MACFAN_LANG=zh-Hans`
 overrides it (useful in scripts and in the self test). The CLI stays English on
