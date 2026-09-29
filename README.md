@@ -465,6 +465,15 @@ publishes.
   Mac doesn't expose) are reported as `no data` / `unreadable` rather than
   guessed at.
 
+## Support
+
+macfan is a spare-time project: free, no telemetry, no feature gates. If it earns
+its keep and you feel like it, there is a [Ko-fi page](https://ko-fi.com/yingzi62662)
+— the **Sponsor** button at the top of this page points at the same place.
+
+Nothing is unlocked by donating. An issue or a pull request is genuinely more
+useful than a coffee.
+
 ## License and provenance
 
 MIT OR Apache-2.0 — see `LICENSE-MIT` and `LICENSE-APACHE`.
@@ -492,3 +501,12 @@ macOS 上控制风扇 + 通用 SMC 工具，Rust 实现，两个二进制、零�
 `sudo` 重新执行（也可用 `SUDO_PASSWORD` 免交互）；输出与经典工具逐字节对齐，并把经典工具
 的**两个 bug**（`si16` 丢符号、读失败的键会打印越界栈内存）修正并写在这里。强制转速是临时的
 ——重启/睡眠/合盖即回到系统自动。
+
+### 支持这个项目
+
+macfan 是业余时间写的：永久免费、无遥测、不做功能阉割。如果它帮到了你，这里有
+[Ko-fi 页面](https://ko-fi.com/yingzi62662)（页面右上角的 **Sponsor** 按钮指向同一处）；
+国内的读者通道还在准备中。
+
+打赏不解锁任何东西 —— 提个 issue 或 PR 其实比一杯咖啡有用。
+

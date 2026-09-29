@@ -1,0 +1,9 @@
+# Funding options for macfan. GitHub shows a Sponsor button in the repository
+# when this file is present on the default branch.
+#
+# Ko-fi passes payments straight to the maintainer's PayPal; nothing is held on
+# Ko-fi's side, and there is no fee on tips.
+ko_fi: yingzi62662
+
+# Add other platforms the same way, for example a domestic channel:
+# custom: ["https://afdian.com/a/<handle>"]
