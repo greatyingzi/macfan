@@ -1,6 +1,6 @@
 [package]
 name = "macfan-menubar"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.74"
 description = "Menu bar fan control for macOS, on top of the macfan library"

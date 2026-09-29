@@ -1,15 +1,17 @@
-//! The settings window: what the app shows on a normal launch.
+//! The settings window.
 //!
-//! Flat coordinates, no auto-layout: the window is a fixed list of controls
-//! laid out top to bottom, so a y cursor is less machinery than an
-//! `NSStackView` and its constraints.
+//! Frosted background (an `NSVisualEffectView`, the same material macOS uses
+//! for sidebars), sections with muted headers, and popups for the mutually
+//! exclusive choices — a popup cannot truncate the way a row of radio buttons
+//! did, and it reads as "pick one" without extra explanation.
 
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::sel;
 use objc2_app_kit::{
-    NSBackingStoreType, NSButton, NSFont, NSPopUpButton, NSTextField, NSView, NSWindow,
-    NSWindowStyleMask,
+    NSBackingStoreType, NSButton, NSColor, NSFont, NSFontWeightMedium, NSPopUpButton, NSTextField,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
+    NSWindow, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
@@ -19,13 +21,13 @@ use crate::{
     TAG_SET_DOCK_ICON, TAG_SET_LAUNCH_LOGIN, TAG_SET_START_MINIMIZED, TAG_SET_STATUS_ITEM,
 };
 
-/// Window size, and how the rows are spaced.
-const WIDTH: f64 = 470.0;
-const HEIGHT: f64 = 486.0;
-const MARGIN: f64 = 20.0;
+const WIDTH: f64 = 480.0;
+const HEIGHT: f64 = 530.0;
+const MARGIN: f64 = 22.0;
 const ROW_HEIGHT: f64 = 24.0;
-const ROW_GAP: f64 = 8.0;
-const SECTION_GAP: f64 = 16.0;
+const ROW_GAP: f64 = 6.0;
+const SECTION_GAP: f64 = 18.0;
+const LABEL_WIDTH: f64 = 96.0;
 
 /// The settings window and the controls inside it, so the caller can seed and
 /// re-read them without walking the view tree.
@@ -36,10 +38,12 @@ pub struct SettingsWindow {
     pub checks: Vec<Retained<NSButton>>,
     /// The three preset speed fields.
     pub preset_fields: Vec<Retained<NSTextField>>,
-    /// Menu bar title options, in `TitleStyle::all()` order.
-    pub style_buttons: Vec<Retained<NSButton>>,
+    /// Menu bar title styles: system first entry is the first style.
+    pub style_popup: Retained<NSPopUpButton>,
     /// Language picker: system first, then `Lang::all()`.
     pub language_popup: Retained<NSPopUpButton>,
+    /// Live line under the heading: what the fans are doing right now.
+    pub subtitle: Retained<NSTextField>,
 }
 
 /// Build the settings window. Controls send their actions to `target`.
@@ -53,32 +57,61 @@ pub fn build<T: NSObjectProtocol + 'static>(
         NSWindow::initWithContentRect_styleMask_backing_defer(
             mtm.alloc(),
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(WIDTH, HEIGHT)),
-            NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
+            NSWindowStyleMask::Titled
+                | NSWindowStyleMask::Closable
+                | NSWindowStyleMask::FullSizeContentView,
             NSBackingStoreType::Buffered,
             false,
         )
     };
     window.setTitle(&NSString::from_str(s.settings_title));
-    // Closing hides the window instead of releasing it.
+    // The blur runs under the title bar, so the title bar itself goes away.
     unsafe { window.setReleasedWhenClosed(false) };
+    window.setTitlebarAppearsTransparent(true);
 
-    let content: Retained<NSView> = NSView::new(mtm);
-    content.setFrame(NSRect::new(
+    let blur = NSVisualEffectView::new(mtm);
+    blur.setFrame(NSRect::new(
         NSPoint::new(0.0, 0.0),
         NSSize::new(WIDTH, HEIGHT),
     ));
+    blur.setMaterial(NSVisualEffectMaterial::Sidebar);
+    blur.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+    blur.setState(NSVisualEffectState::FollowsWindowActiveState);
 
-    // Rows are laid out from the top down with a cursor.
-    let mut y = HEIGHT - MARGIN - ROW_HEIGHT;
-    let label = |text: &str, y: f64, size: f64| {
+    let mut y = HEIGHT - MARGIN - 34.0;
+
+    // --- heading and live state -------------------------------------------
+    let heading =
+        NSTextField::labelWithString(&NSString::from_str(&format!("macfan {version}")), mtm);
+    heading.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y),
+        NSSize::new(WIDTH - 2.0 * MARGIN, 26.0),
+    ));
+    heading.setFont(Some(&*NSFont::boldSystemFontOfSize(17.0)));
+    blur.addSubview(&heading);
+
+    y -= 24.0;
+    let subtitle = NSTextField::labelWithString(&NSString::from_str("—"), mtm);
+    subtitle.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y),
+        NSSize::new(WIDTH - 2.0 * MARGIN, 20.0),
+    ));
+    subtitle.setFont(Some(&*NSFont::systemFontOfSize(12.0)));
+    subtitle.setTextColor(Some(&*NSColor::secondaryLabelColor()));
+    blur.addSubview(&subtitle);
+
+    // --- helpers ----------------------------------------------------------
+    let header = |text: &str, y: f64| {
         let field = NSTextField::labelWithString(&NSString::from_str(text), mtm);
         field.setFrame(NSRect::new(
             NSPoint::new(MARGIN, y),
-            NSSize::new(WIDTH - 2.0 * MARGIN, ROW_HEIGHT),
+            NSSize::new(WIDTH - 2.0 * MARGIN, 18.0),
         ));
-        field.setFont(Some(&NSFont::systemFontOfSize(size)));
-        content.addSubview(&field);
-        field
+        field.setFont(Some(&*NSFont::systemFontOfSize_weight(11.0, unsafe {
+            NSFontWeightMedium
+        })));
+        field.setTextColor(Some(&*NSColor::secondaryLabelColor()));
+        blur.addSubview(&field);
     };
     let checkbox = |text: &str, tag: isize, y: f64| {
         let button = unsafe {
@@ -94,35 +127,58 @@ pub fn build<T: NSObjectProtocol + 'static>(
             NSSize::new(WIDTH - 2.0 * MARGIN, ROW_HEIGHT),
         ));
         button.setTag(tag);
-        content.addSubview(&button);
+        blur.addSubview(&button);
+        button
+    };
+    let popup = |items: &[&str], y: f64| {
+        let button = NSPopUpButton::new(mtm);
+        button.setFrame(NSRect::new(
+            NSPoint::new(MARGIN + LABEL_WIDTH, y),
+            NSSize::new(WIDTH - 2.0 * MARGIN - LABEL_WIDTH, ROW_HEIGHT),
+        ));
+        for item in items {
+            button.addItemWithTitle(&NSString::from_str(item));
+        }
+        blur.addSubview(&button);
         button
     };
 
-    let heading = label(&format!("macfan {version}"), y, 13.0);
-    heading.setFont(Some(&NSFont::boldSystemFontOfSize(13.0)));
-
+    // --- menu bar ---------------------------------------------------------
+    y -= SECTION_GAP;
+    header(s.section_menu_bar, y);
+    y -= ROW_HEIGHT + ROW_GAP;
     let mut checks = Vec::with_capacity(4);
-    let rows: [(isize, &str); 4] = [
-        (TAG_SET_STATUS_ITEM, s.show_status_item),
-        (TAG_SET_DOCK_ICON, s.show_dock_icon),
-        (TAG_SET_LAUNCH_LOGIN, s.launch_at_login),
-        (TAG_SET_START_MINIMIZED, s.start_minimized),
-    ];
-    for (tag, text) in rows {
-        y -= ROW_HEIGHT + ROW_GAP;
-        checks.push(checkbox(text, tag, y));
+    checks.push(checkbox(s.show_status_item, TAG_SET_STATUS_ITEM, y));
+
+    y -= ROW_HEIGHT + ROW_GAP;
+    let style_label = NSTextField::labelWithString(&NSString::from_str(s.title_style_label), mtm);
+    style_label.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y),
+        NSSize::new(LABEL_WIDTH, ROW_HEIGHT),
+    ));
+    blur.addSubview(&style_label);
+    let style_popup = popup(&[s.style_icon_rpm, s.style_rpm_only, s.style_icon_temp], y);
+    unsafe {
+        style_popup.setTarget(Some(target.as_any_object()));
+        style_popup.setAction(Some(sel!(titleStyleChanged:)));
     }
 
-    y -= ROW_HEIGHT + ROW_GAP;
-    let note = label(s.keep_one_visible, y, 11.0);
-    let _ = note;
-
-    // --- preset speeds -----------------------------------------------------
+    // --- application ------------------------------------------------------
     y -= ROW_HEIGHT + SECTION_GAP;
-    label(s.presets_label, y, 12.0);
+    header(s.section_app, y);
     y -= ROW_HEIGHT + ROW_GAP;
-    let field_width = 66.0;
-    let field_step = field_width + 10.0;
+    checks.push(checkbox(s.show_dock_icon, TAG_SET_DOCK_ICON, y));
+    y -= ROW_HEIGHT + ROW_GAP;
+    checks.push(checkbox(s.launch_at_login, TAG_SET_LAUNCH_LOGIN, y));
+    y -= ROW_HEIGHT + ROW_GAP;
+    checks.push(checkbox(s.start_minimized, TAG_SET_START_MINIMIZED, y));
+
+    // --- presets ----------------------------------------------------------
+    y -= ROW_HEIGHT + SECTION_GAP;
+    header(s.presets_label, y);
+    y -= ROW_HEIGHT + ROW_GAP;
+    let field_width = 70.0;
+    let field_step = field_width + 8.0;
     let mut preset_fields = Vec::with_capacity(3);
     for (index, rpm) in DEFAULT_PRESETS.iter().enumerate() {
         let field = NSTextField::new(mtm);
@@ -131,7 +187,7 @@ pub fn build<T: NSObjectProtocol + 'static>(
             NSSize::new(field_width, ROW_HEIGHT),
         ));
         field.setStringValue(&NSString::from_str(&rpm.to_string()));
-        content.addSubview(&field);
+        blur.addSubview(&field);
         preset_fields.push(field);
     }
     let apply_button = unsafe {
@@ -144,66 +200,53 @@ pub fn build<T: NSObjectProtocol + 'static>(
     };
     apply_button.setFrame(NSRect::new(
         NSPoint::new(MARGIN + 3.0 * field_step + 6.0, y),
-        NSSize::new(90.0, ROW_HEIGHT),
+        NSSize::new(96.0, ROW_HEIGHT + 2.0),
     ));
-    content.addSubview(&apply_button);
+    // The one coloured control: it commits, so it carries the accent.
+    apply_button.setBezelColor(Some(&*NSColor::controlAccentColor()));
+    blur.addSubview(&apply_button);
 
-    // --- menu bar title style ---------------------------------------------
+    // --- language ---------------------------------------------------------
     y -= ROW_HEIGHT + SECTION_GAP;
-    label(s.title_style_label, y, 12.0);
+    header(s.language_label, y);
     y -= ROW_HEIGHT + ROW_GAP;
-    let style_titles = [s.style_icon_rpm, s.style_rpm_only, s.style_icon_temp];
-    let mut style_buttons = Vec::with_capacity(3);
-    let mut x = MARGIN;
-    for (index, style) in TitleStyle::all().iter().enumerate() {
-        let title = &style_titles[index];
-        let _ = style;
-        let button = unsafe {
-            NSButton::radioButtonWithTitle_target_action(
-                &NSString::from_str(title),
-                Some(target.as_any_object()),
-                Some(sel!(titleStyleChanged:)),
-                mtm,
-            )
-        };
-        let text_width = title.chars().count() as f64 * 8.0 + 40.0;
-        button.setFrame(NSRect::new(
-            NSPoint::new(x, y),
-            NSSize::new(text_width, ROW_HEIGHT),
-        ));
-        button.setTag(index as isize);
-        content.addSubview(&button);
-        style_buttons.push(button);
-        x += text_width + 6.0;
-    }
-
-    // --- language ----------------------------------------------------------
-    y -= ROW_HEIGHT + SECTION_GAP;
-    label(s.language_label, y, 12.0);
-    y -= ROW_HEIGHT + ROW_GAP;
-    let language_popup = NSPopUpButton::new(mtm);
-    language_popup.setFrame(NSRect::new(
+    let language_label = NSTextField::labelWithString(&NSString::from_str(s.language_label), mtm);
+    language_label.setFrame(NSRect::new(
         NSPoint::new(MARGIN, y),
-        NSSize::new(190.0, ROW_HEIGHT),
+        NSSize::new(LABEL_WIDTH, ROW_HEIGHT),
     ));
-    language_popup.addItemWithTitle(&NSString::from_str(s.language_system));
+    language_label.setHidden(true);
+    blur.addSubview(&language_label);
+    let mut language_items = vec![s.language_system];
     for lang in Lang::all() {
-        language_popup.addItemWithTitle(&NSString::from_str(language_name(lang)));
+        language_items.push(language_name(lang));
     }
+    let language_popup = popup(&language_items, y);
     unsafe {
         language_popup.setTarget(Some(target.as_any_object()));
         language_popup.setAction(Some(sel!(languageChanged:)));
     }
-    content.addSubview(&language_popup);
 
-    window.setContentView(Some(&content));
+    // --- footer -----------------------------------------------------------
+    y -= ROW_HEIGHT + SECTION_GAP;
+    let note = NSTextField::labelWithString(&NSString::from_str(s.keep_one_visible), mtm);
+    note.setFrame(NSRect::new(
+        NSPoint::new(MARGIN, y),
+        NSSize::new(WIDTH - 2.0 * MARGIN, 32.0),
+    ));
+    note.setFont(Some(&*NSFont::systemFontOfSize(11.0)));
+    note.setTextColor(Some(&*NSColor::tertiaryLabelColor()));
+    blur.addSubview(&note);
+
+    window.setContentView(Some(&blur));
     window.center();
     SettingsWindow {
         window,
         checks,
         preset_fields,
-        style_buttons,
+        style_popup,
         language_popup,
+        subtitle,
     }
 }
 
@@ -225,6 +268,14 @@ pub fn language_tag(index: usize) -> Option<Option<&'static str>> {
     } else {
         all.get(index - 1).map(|lang| Some(lang.code()))
     }
+}
+
+/// Index of the popup entry for a title style.
+pub fn style_index(style: TitleStyle) -> usize {
+    TitleStyle::all()
+        .iter()
+        .position(|candidate| *candidate == style)
+        .unwrap_or(0)
 }
 
 /// Handy for `&dyn AnyObject`-ish call sites.

@@ -133,6 +133,12 @@ pub struct Strings {
     pub language_label: &'static str,
     /// Language option: follow the system.
     pub language_system: &'static str,
+    /// Section header above the menu bar options.
+    pub section_menu_bar: &'static str,
+    /// Section header above the application options.
+    pub section_app: &'static str,
+    /// Label for the temperature line in the menu.
+    pub temperature_label: &'static str,
     /// Menu item: re-read the fans.
     pub refresh: &'static str,
     /// Menu item: quit.
@@ -192,6 +198,9 @@ const EN: Strings = Strings {
     style_icon_temp: "Icon + temperature",
     language_label: "Language (next launch)",
     language_system: "Follow system",
+    section_menu_bar: "MENU BAR",
+    section_app: "APPLICATION",
+    temperature_label: "Temperature",
     refresh: "Refresh",
     quit: "Quit",
     dialog_title: "Set fan speed",
@@ -235,6 +244,9 @@ const ZH_HANS: Strings = Strings {
     style_icon_temp: "图标 + 温度",
     language_label: "语言（下次启动生效）",
     language_system: "跟随系统",
+    section_menu_bar: "菜单栏",
+    section_app: "应用",
+    temperature_label: "温度",
     refresh: "刷新",
     quit: "退出",
     dialog_title: "设置风扇转速",
@@ -278,6 +290,9 @@ const ZH_HANT: Strings = Strings {
     style_icon_temp: "圖示 + 溫度",
     language_label: "語言（下次啟動生效）",
     language_system: "跟隨系統",
+    section_menu_bar: "選單列",
+    section_app: "應用",
+    temperature_label: "溫度",
     refresh: "重新整理",
     quit: "結束",
     dialog_title: "設定風扇轉速",
@@ -321,6 +336,9 @@ const JA: Strings = Strings {
     style_icon_temp: "アイコン + 温度",
     language_label: "言語（次回起動時に反映）",
     language_system: "システムに従う",
+    section_menu_bar: "メニューバー",
+    section_app: "アプリケーション",
+    temperature_label: "温度",
     refresh: "更新",
     quit: "終了",
     dialog_title: "ファン回転数を設定",
@@ -443,6 +461,9 @@ mod tests {
                 s.style_icon_temp,
                 s.language_label,
                 s.language_system,
+                s.section_menu_bar,
+                s.section_app,
+                s.temperature_label,
                 s.refresh,
                 s.quit,
                 s.dialog_title,
