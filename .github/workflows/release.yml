@@ -93,7 +93,8 @@ jobs:
             echo "secrets.TAP_TOKEN is not set — the cask is not updated."
             echo "To automate it: create a token with repo scope for"
             echo "greatyingzi/homebrew-tap and store it as TAP_TOKEN here."
-            echo "Meanwhile the cask can be bumped by hand:"
+            echo "Update it with scripts/update-cask.sh <version>, which hashes the"
+            echo "published DMG and reads the cask back. Or bump it by hand:"
             echo "  version ${V} / sha256 ${SHA}"
             exit 0
           fi
