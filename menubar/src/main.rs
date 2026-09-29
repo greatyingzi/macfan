@@ -976,6 +976,16 @@ extern "C" {
 /// Read back what we just built: proves the AppKit wiring without needing a
 /// screen recorder (which an agent shell typically cannot get).
 fn selftest(controller: &Controller, menu: &NSMenu) {
+    // The real preferences are off limits: this test plays with settings, and an
+    // earlier version left the user's title choice changed. Everything below
+    // writes to a throwaway file, and the redirect itself is checked so a future
+    // step cannot quietly save over the user's settings.
+    let selftest_settings =
+        std::env::temp_dir().join(format!("macfan-selftest-{}.conf", std::process::id()));
+    std::env::set_var("MACFAN_SETTINGS", &selftest_settings);
+    let _ = std::fs::remove_file(&selftest_settings);
+    let redirect_ok = Settings::path() == selftest_settings;
+    println!("selftest: settings redirection = {redirect_ok}");
     let lang = *controller.ivars().lang.borrow();
     let title = controller
         .ivars()
@@ -1126,13 +1136,9 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         live.show_status_item, live.show_dock_icon, live.start_minimized
     );
 
-    // Settings file round trip, again in a throwaway location.
-    let settings_file = std::env::temp_dir().join(format!(
-        "macfan-settings-selftest-{}.conf",
-        std::process::id()
-    ));
+    // Settings file round trip, in the throwaway location set up above.
+    let settings_file = Settings::path();
     let _ = std::fs::remove_file(&settings_file);
-    std::env::set_var("MACFAN_SETTINGS", &settings_file);
     let wanted = Settings {
         show_status_item: false,
         show_dock_icon: true,
@@ -1329,6 +1335,7 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     controller.refresh();
 
     let ok = !title.is_empty()
+        && redirect_ok
         && presets_ok
         && retitle_ok
         && style_ok
