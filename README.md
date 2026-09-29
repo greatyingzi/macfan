@@ -2,201 +2,141 @@
 
 [![Release](https://img.shields.io/github/v/release/greatyingzi/macfan?sort=semver&color=blue)](https://github.com/greatyingzi/macfan/releases/latest)
 [![CI](https://github.com/greatyingzi/macfan/actions/workflows/ci.yml/badge.svg)](https://github.com/greatyingzi/macfan/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license-and-provenance)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Platform](https://img.shields.io/badge/platform-macOS%2011%2B-lightgrey.svg)](#install)
-[![Homebrew](https://img.shields.io/badge/Homebrew-greatyingzi%2Ftap%2Fmacfan-orange.svg)](#homebrew)
-[![Downloads](https://img.shields.io/github/downloads/greatyingzi/macfan/total.svg)](https://github.com/greatyingzi/macfan/releases)
+[![Homebrew](https://img.shields.io/badge/Homebrew-greatyingzi%2Ftap%2Fmacfan-orange.svg)](#install)
 
 **English** · [简体中文](README.zh-CN.md)
 
----
-
-SMC fan control and a general AppleSMC client for macOS, in Rust. Two small
-binaries, zero dependencies, no privileged helper.
-
-| binary  | what it does |
-|---------|--------------|
-| `macfan` | read fan speeds, temperatures and mode; force fans to max / min / a given rpm; hand them back to the system |
-| `rsmc`   | general-purpose SMC client with the same command line as the classic `smc` tool (`-f`, `-t`, `-l`, `-k`, `-r`, `-w`), so it drops into existing scripts |
+Fan control and an AppleSMC client for macOS, in Rust. A menu bar app and two
+small command-line binaries. Free, no telemetry, no accounts, no privileged helper.
 
 ```console
-$ macfan
-Total fans in system: 1
-
+$ macfan status          # one of the CLI's commands; the app does this on screen
 Fan #0:
     Current speed : 4128
     Minimum speed: 1199
     Maximum speed: 7199
-    Safe speed   : 0
     Target speed : 4128
     Mode         : auto
-
-$ macfan max
-fan(s) -> MAX (forced, 1 fan(s)). verify:
-Total fans in system: 1
-
-Fan #0:
-    Current speed : 5190
-    Minimum speed: 1199
-    Maximum speed: 7199
-    Safe speed   : 0
-    Target speed : 7199
-    Mode         : forced
-
-$ macfan temps | head -4
-  TB0T    34.6 °C
-  TB1T    34.6 °C
-  TB2T    32.2 °C
-  TCHP    52.1 °C
-
-$ macfan auto        # give the fan back to the system
 ```
 
-- **One binary per architecture** — the release binaries are universal
-  (arm64 + x86_64), so the same file runs on Apple Silicon and Intel Macs.
-  No Homebrew, no Python, no Perl, no recompiling on each machine.
-- **Reads need no privileges.** Writes need root, and `macfan` re-runs itself
-  through `sudo` (one prompt, then cached). `SUDO_PASSWORD` in the environment
-  enables unattended use; `--no-sudo` disables escalation entirely.
-- **Verified against the classic tool**, not just "looks right": every SMC key
-  this machine exposes is compared, mismatches are re-checked, and the two
-  places where the classic tool is wrong are documented below.
-
-
-## Features
-
-**Menu bar app** — a real app, not a script:
-
-- Fan speed at a glance, with control from the menu: force max, force min, three
-  presets, or type any rpm (each fan capped at its own maximum).
-- **Temperatures by family**, not one number: CPU hot spot, CPU die, GPU, heatsink,
-  SSD proximity, memory, battery and wireless. Each family is smoothed over a 15 s
-  window and judged against its own thresholds — 45 °C is worth flagging on a
-  battery and unremarkable on a CPU rail. (`macfan temps`, below)
-- **Restore the last speed at launch** (off by default): sleeping, rebooting and
-  closing the lid all hand the fans back to the system, so this puts your setting
-  back when the app starts.
-- Settings window with a language picker. The interface ships **English, 简体中文,
-  繁體中文 and 日本語**, and follows the system language by default.
-- Distributed as a normal `.app` (universal, DMG) and through a Homebrew cask.
-
-**Command line** — two small binaries, zero dependencies:
-
-- `macfan` — fan status, `max` / `min` / `set <rpm>` / `auto`, and `macfan temps`
-  for grouped temperatures.
-- `rsmc` — a general AppleSMC client that keeps the classic `smc` command line
-  (`-f -t -l -k -r -w`), so it drops into existing scripts. Parity is checked
-  key by key in `scripts/parity-check.sh`.
-
-**Engineering** — reading needs no privileges, writing goes through a single `sudo`
-prompt. No kext, no launch daemon, no privileged helper. The release binaries are
-universal (arm64 + x86_64) and run on macOS 11 or newer.
-
 ## Install
-
-### Homebrew
 
 ```sh
 brew install --cask greatyingzi/tap/macfan
 ```
 
-The cask checks the DMG's checksum on the way in, and `brew upgrade --cask macfan`
-picks up new releases. macfan is ad-hoc signed rather than notarised, so macOS
-quarantines the download and the first launch needs one approval — one line clears
-it:
+macfan is ad-hoc signed rather than notarised, so the first launch needs one
+approval:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/macfan.app
 ```
 
-### Universal binary (no toolchain needed)
-
-```sh
-curl -LO https://github.com/greatyingzi/macfan/releases/latest/download/macfan-universal.tar.gz
-tar xzf macfan-universal.tar.gz
-cd macfan-universal && ./install.sh
-```
-
-The same release carries the two binaries on their own
-(`macfan-<version>-macos-universal`, `rsmc-<version>-macos-universal`) and a
-`SHA256SUMS` file. GitHub does not preserve file modes for release assets, so a
-standalone download needs `chmod +x` first; the tarball keeps its modes.
-
-### From source (needs a Rust toolchain)
-
-```sh
-git clone https://github.com/greatyingzi/macfan
-cd macfan
-cargo build --release            # target/release/{macfan,rsmc}
-scripts/install.sh target/release
-```
-
-`install.sh` puts the binaries in `~/.local/bin` and prints the `PATH` line if that
-directory isn't on it yet.
-
-**Requirements:** macOS 11 or newer, any architecture. Reading the SMC (including
-fan control) uses the `AppleSMC` IOKit user client, which is present on every Mac.
-The bundle, the icon and the Gatekeeper step are covered in
-[App bundle and DMG](#app-bundle-and-dmg).
+Without Homebrew, `macfan-universal.tar.gz` from the
+[latest release](https://github.com/greatyingzi/macfan/releases/latest) unpacks
+into `./install.sh`; from source it is `cargo build --release`. macOS 11 or newer,
+any architecture.
 
 ## Support
 
-macfan is written and maintained in spare time, and it is meant to stay usable by
-anyone: free, no telemetry, no account, no feature gated behind a payment.
-Everything the app can do, every user can do.
+macfan is free and meant to stay that way: no telemetry, no account, no feature
+behind a payment. If it earns its place and you want to say thanks, there is a
+[Ko-fi page](https://ko-fi.com/yingzi62662) — the **Sponsor** button at the top of
+this page points at the same place. Tips are one-off and cover the project's real
+costs, not anyone's income: a Developer ID would end the first-launch approval for
+every user, and second-hand hardware would widen testing, which today is a single
+M2 MacBook Pro. Donating unlocks nothing.
 
-If it has earned a place on your menu bar and you want to say thanks, there is a
-[Ko-fi page](https://ko-fi.com/yingzi62662) (the **Sponsor** button at the top of
-this page points at the same place, and it reaches the same PayPal account).
-Tips are one-off, and they go towards the project's real costs rather than to
-anyone's income: an Apple Developer ID would remove the first-launch approval step
-for every user, and second-hand hardware would widen testing — the fan-control
-path is currently verified on a single M2 MacBook Pro.
+What helps more than money: **report what does not work** — a machine where
+`macfan status` prints the wrong speed, a key that reads `unreadable`, fans that
+never settle — or try it on hardware this project has never seen. Intel Macs and
+desktops are untested.
 
-Nothing is unlocked by donating. No priority on issues, no extra features, no
-mention required. If you would rather not, that is the expected case and it
-changes nothing.
+## Menu bar app
 
-Things that help more than money, roughly in order of how much:
+The app is the point of the project: fan control and temperatures without a terminal.
 
-1. **Report what does not work.** A machine where `macfan status` prints the wrong
-   speed, where a key reads `unreadable`, or where the fan does not settle is the
-   most useful thing you can send. The README's *Verification* section says what is
-   already covered, so the gaps are visible.
-2. **Try it on hardware this project has never seen.** Intel Macs, desktops, and
-   two-fan laptops are untested by design — no machine here has them.
-3. **Star it, or link to it** where it fits.
+```sh
+cargo run --manifest-path menubar/Cargo.toml    # or install the released .app
+```
 
-Supporters are not listed anywhere unless they ask to be, and there is no
-newsletter, no Discord, no tier to manage.
+The status bar shows what you choose — fan speed (`7219`, or `7219/2400` on a
+two-fan Mac) or the CPU hot spot (`79°C`) — with an optional glyph (a fan or a
+thermometer), and nothing else: no mode marker, no unit on a speed.
 
+| menu entry | what it does |
+|------------|--------------|
+| `Current: …` | live state line; the tick marks the mode in force, read from the SMC rather than remembered from the last click |
+| Force maximum / minimum speed | every fan to its own limit |
+| Automatic (system control) | hand the fans back |
+| Set speed… | dialog, validated and clamped to this machine's range |
+| Set 3000 / 4500 / 6000 rpm | one-click presets (editable in Settings) |
+| Launch at login | per-user LaunchAgent, no daemon |
+| Show / Icon in the title | what the title reports — `Speed` or `Temperature` — and whether a glyph sits beside it |
+| Language | follows the system: English, 简体中文, 繁體中文, 日本語 |
+| Refresh / Quit | re-read now (otherwise every 2 s) / quit |
 
-## Usage
+**Temperatures.** "Temperature" is not one number: 126 sensors measure different
+places, and a CPU hot spot at 92 °C and a battery at 36 °C are both true at once.
+The app's temperature row opens a submenu of eight families, each smoothed over
+15 s and coloured against its own thresholds, because 45 °C means different things
+on a battery and on a CPU rail:
 
-### `macfan` — fans
+| family | warm | hot | family | warm | hot |
+|--------|------|-----|--------|------|-----|
+| CPU | 85 °C | 100 °C | Memory | 55 °C | 70 °C |
+| CPU die | 80 °C | 95 °C | Battery | 40 °C | 45 °C |
+| GPU | 75 °C | 90 °C | Charger | 45 °C | 55 °C |
+| Heatsink | 65 °C | 80 °C | Wireless | 50 °C | 60 °C |
+| SSD (proximity) | 60 °C | 75 °C | Power delivery | 70 °C | 85 °C |
+
+The number is a *hot spot*, not a mean — per-core sensors park and drop out, so a
+mean over a changing sample set jumps, while the maximum is stable and is what
+drives fan ramp and throttling. It is smoothed over a 15 s time constant (raw
+readings move ±3…5 °C between two reads); when the window's peak is 3 °C or more
+above the average, it is shown next to it.
+
+**Settings.** The window covers the title, the language, launch-at-login, the three
+presets, and **restore the last speed at launch** (off by default). Sleeping,
+rebooting and closing the lid all hand the fans back to the system, so that option
+puts your setting back when the app starts. It skips the write when nothing would
+change, so the authorisation prompt appears only when something actually moves.
+
+**Privileges.** Reading needs none. Writing needs root: the app asks the `macfan`
+CLI to do it (which handles `sudo` itself), or falls back to the standard macOS
+authorisation dialog. No privileged helper, no daemon, no kext. After a write it
+re-reads the SMC and warns if the fans did not end up in the requested state.
+
+**Packaging.** `menubar/scripts/make-app.sh` builds `dist/macfan.app` (ad-hoc
+signed, icon rendered from `assets/icon.svg`), `make-dmg.sh` wraps it in a DMG.
+Drag the app into `/Applications` — Launchpad only indexes `/Applications` and
+`~/Applications` — and clear the quarantine flag as shown under Install.
+
+## Command line
+
+Two binaries, zero dependencies, universal (arm64 + x86_64).
+
+| binary | what it does |
+|--------|--------------|
+| `macfan` | fan speeds and modes; force max / min / a given rpm; hand control back |
+| `rsmc` | general AppleSMC client with the classic `smc` command line (`-f -t -l -k -r -w`), so it drops into existing scripts |
+
+### `macfan`
 
 | command | effect |
 |---------|--------|
-| `macfan` / `macfan status` | fan speeds, mode, and the SMC's min/max/safe/target for every fan |
-| `macfan max` | force every fan to its **own** maximum |
-| `macfan min` | force every fan to its own minimum (quiet — watch the temperatures) |
-| `macfan set <rpm>` | force every fan to `<rpm>`, capped at each fan's maximum |
-| `macfan auto` | hand the fans back to system control |
-| `macfan temps` | every readable temperature sensor in °C |
-| `macfan list` | raw fan dump (alias of `status`) |
+| `macfan` / `status` / `list` | speeds, mode, and the SMC's min/max/safe/target for every fan |
+| `macfan max` / `min` | force every fan to its own maximum / minimum |
+| `macfan set <rpm>` | force to `<rpm>`, capped per fan |
+| `macfan auto` | hand the fans back to the system |
+| `macfan temps` | temperatures by family (below) |
 
-Options: `--no-sudo` (report the permission error instead of escalating),
-`-V`/`--version`, `-h`/`--help`.
+`--no-sudo` reports the permission error instead of escalating. A forced fan is
+temporary: a reboot, sleep or a closed lid returns it to system control.
 
-A forced fan is **temporary**: rebooting, sleeping or closing the lid returns
-it to system control, and `macfan auto` does it immediately.
-
-### `macfan temps` — temperatures by family
-
-"Temperature" is not one number. A MacBook Pro exposes 126 readable sensors, and
-they measure different places at different scales: a CPU hot spot at 92 °C and a
-battery cell at 36 °C are both true at the same moment, and their average means
-nothing.
+### `macfan temps`
 
 ```console
 $ macfan temps
@@ -213,315 +153,69 @@ $ macfan temps
   Power delivery    20     48.2 °C     43.5 °C   ok  (secondary)
   System             2     41.0 °C     36.8 °C   ok  (secondary)
   Other              3     34.4 °C     16.7 °C   ok  (secondary)
-  (per-sensor list: macfan temps --all; one family: macfan temps gpu)
 ```
 
-`state` compares the family's **hot spot** against that family's own thresholds —
-45 °C is worth flagging on a battery and unremarkable on a CPU rail. Sensors
-reading zero are skipped: they are unwired, and counting them would drag a mean
-down for no reason.
+`macfan temps <family>` narrows it to one, `--all` names every sensor. `state` uses
+the same warm/hot thresholds as the app; sensors reading zero are skipped, being
+unwired.
 
-#### Which readings are trustworthy
-
-Each family was loaded on purpose and watched, so a family is only claimed when
-its sensors moved for the right reason (M2 13" MacBook Pro, 2026-09):
+Which families can be trusted was measured, not assumed — each was loaded on
+purpose (M2 13" MacBook Pro):
 
 | family | keys | measured response |
 |--------|------|-------------------|
 | CPU | `Tp0*`, `Tp1*`, `Te0*` | +24…29 °C under 8 CPU threads |
-| CPU die | `TCMz` (max), `TCMb` (average) | the SMC's own die aggregates, same ramp |
-| GPU | `Tg0*`, `Tg1*` | +11…12 °C under a WebGL shader burn, while the CPU moved +2 |
-| Heatsink | `Th0*` | +7.5 °C under GPU load, slower and smoother than the die |
-| Battery | `TB*T` | 36.4 °C, flat under every load — a real probe that is simply inert |
-| Charger | `TCHP` | rises while charging |
-| Memory | `TMVR`, `TVM*` | memory rail and its regulator, 44…64 °C |
-| Wireless | `TW0*` | +0.7 °C: small but real |
+| CPU die | `TCMz`, `TCMb` | the SMC's own die max / average, same ramp |
+| GPU | `Tg0*`, `Tg1*` | +11…12 °C under a WebGL burn, CPU +2 |
+| Heatsink | `Th0*` | +7.5 °C under GPU load, slower and smoother |
+| Battery | `TB*T` | 36.4 °C, flat under every load — real, just inert |
+| Charger / memory / wireless | `TCHP`, `TMVR`/`TVM*`, `TW0*` | charger rises on charge; memory rail 44…64 °C; wireless +0.7 °C |
 
-**Not trustworthy: the SSD family.** Keys `Ts0*`, `Tsx*` and `TH0*` are labelled
-SSD/NAND in the community key databases, but 90 s of sustained writes with
-`fsync` moved them by 3.7 °C — exactly what the die sensors moved, i.e. they
-track board heat rather than flash activity. macOS exposes no NVMe temperature
-either (`system_profiler SPNVMeDataType` is empty, the controller in `ioreg` has
-no temperature properties, and `smartctl` cannot talk to Apple's storage). They
-are listed as **SSD (proximity)** and never presented as a disk temperature.
+Two caveats worth one line each. The **SSD family is not a disk temperature**:
+90 s of sustained writes moved `Ts0*` by 3.7 °C — the same as the die sensors, so
+they track board heat — and macOS exposes no NVMe temperature at all. They are
+labelled *SSD (proximity)* and never presented as storage. The SMC's derived values
+(`TVS*`, `TVD*`, `TVA*`, `TAO`) repeat other readings, so they appear only in
+`--all`.
 
-The SMC's derived values (`TVS*`, `TVD*`, `TVA*`, `TAO`) repeat other readings
-rather than measuring a place of their own, so they appear only in
-`macfan temps --all` and are never summarised or alarmed about.
-
-#### What is displayed, and how
-
-- **Hot spot, not mean.** Per-core sensors park and drop out of the readable
-  set, so a mean over a changing sample size jumps; the maximum is stable, and
-  it is also what drives fan ramp and throttling.
-- **Smoothed over a 15 s time constant** (an exponential moving average that
-  uses the real interval between samples). Raw readings move ±3…5 °C between two
-  reads, which is unreadable at a glance; 15 s steadies the number while still
-  showing a workload ramp within about twenty seconds. The peak of the window is
-  shown next to it when it is 3 °C or more above, because a spike that has
-  already passed is what someone watching wants to know.
-- The menu bar app puts the same families in a submenu under its temperature
-  row, each judged against its own thresholds.
-
-#### In the menu bar
-
-The app shows the same families with two differences worth knowing. Its temperature
-row reports one family — CPU by default, and the title's *Show* setting decides
-which — and opening that row lists **eight** of them: CPU, CPU die, GPU, heatsink,
-SSD proximity, memory, battery and wireless. The rest (charger, power delivery,
-system, other) stay in the CLI, because nothing about them changes under load.
-
-Each family's number is the same 15 s moving average, coloured against its own
-thresholds. The colour is the only thing that changes, so a battery at 41 °C and a
-CPU at 41 °C look different without either number lying:
-
-| family | warm | hot |
-|--------|------|-----|
-| CPU | 85 °C | 100 °C |
-| CPU die | 80 °C | 95 °C |
-| GPU | 75 °C | 90 °C |
-| Heatsink | 65 °C | 80 °C |
-| SSD (proximity) | 60 °C | 75 °C |
-| Memory | 55 °C | 70 °C |
-| Battery | 40 °C | 45 °C |
-| Charger | 45 °C | 55 °C |
-| Wireless | 50 °C | 60 °C |
-| Power delivery | 70 °C | 85 °C |
-| System, other | 70 °C | 85 °C |
-
-Warm and hot are the same two numbers the CLI's `state` column reports, so the
-window and the terminal never disagree.
-
-### Menu bar title
-
-Two settings, one dimension each:
-
-| setting | values | what it does |
-|---------|--------|--------------|
-| Show | `Speed` / `Temperature` | what the number is |
-| Icon in the title | on / off | whether a glyph sits beside it |
-
-A speed is bare — `7219`, or `7219/2400` on a two-fan Mac. A temperature keeps
-its degree sign (`79°C`), which is what tells the two apart. The glyph names the
-reading (a fan for speed, a thermometer for °C) and never carries state: the menu
-says which mode is active, in words, on its first line.
-
-Settings files written by 0.2.2 and earlier are migrated on read:
-`title_style = rpm_only` becomes speed without an icon, `icon_rpm` becomes speed
-with one, `icon_temp` becomes temperature with one.
-
-### `rsmc` — raw SMC access
+### `rsmc`
 
 | flag | meaning |
 |------|---------|
 | `-f` | decoded fan information |
-| `-t` | list temperatures (`sp78` sensors, as the classic tool does) |
-| `-l` | list every key with its value |
-| `-k <key>` | key to operate on, e.g. `-k F0Ac` |
-| `-r` | read the key given with `-k` |
-| `-w <hex>` | write raw bytes to the key given with `-k` |
+| `-t` | temperatures (`sp78` sensors, as the classic tool does) |
+| `-l` | every key with its value |
+| `-k <key>` `-r` `-w <hex>` | operate on a key: read it, or write raw bytes |
 | `-v`, `-h` | version, help |
 
 ```console
 $ rsmc -k F0Ac -r
   F0Ac  [flt ]  4128 (bytes 00 40 81 45)
-
-$ rsmc -k F0Tg -r                      # target speed as a raw f32
-  F0Tg  [flt ]  4128 (bytes 00 40 81 45)
-
-$ sudo rsmc -k F0Tg -w 00006042        # 56.0 rpm target, written by hand
 ```
 
-SMC keys are 4 characters, space padded (`FS!` works as well as `FS! `).
-
-
-## Menu bar app
-
-`menubar/` is a menu bar item built on the same library (AppKit through
-`objc2` — no Swift, no Xcode project, no Electron):
-
-```sh
-cargo run --manifest-path menubar/Cargo.toml
-```
-
-The status bar shows what you choose — the fan speed (`7219`, or `7219/2400` on a
-two-fan Mac) or the CPU hot spot (`79°C`) — with an optional glyph and nothing
-else: no mode marker, no unit on a speed. See [Menu bar title](#menu-bar-title).
-The menu has a live line per fan, then:
-
-| menu item | what it does |
-|-----------|--------------|
-| Force maximum / minimum speed | force every fan to its own limit |
-| Automatic (system control) | hand the fans back to the system |
-| Set speed… | dialog with an input field, validated and clamped to the machine's range |
-| Set 3000 / 4500 / 6000 rpm | one-click presets |
-| Launch at login | tick to install a per-user LaunchAgent |
-| Preset speeds | three editable fields, applied with the Apply button — the menu and its ticks follow them |
-| Show | what the title reports: `Speed` or `Temperature` |
-| Icon in the title | whether a glyph (fan / thermometer) sits beside it |
-| Language | follows the system by default; the picker overrides it on the next launch |
-| Refresh | re-read the fans now (otherwise every 2 s) |
-| Quit | |
-
-The menu also says **which mode is in force**: a `Current: …` line at the top,
-a tick on the matching entry (automatic, maximum, minimum, or a preset), and a
-`Custom <rpm> rpm` entry when the speed in force is not one of the presets. The
-ticks come from the measured state — every fan's target compared against its
-own limits — not from the last click, so if another tool or the SMC itself moves
-the fans, the menu follows within its two-second refresh. Fans that end up with
-different targets report a mixed state instead of pretending.
-
-**Languages.** The UI follows the system language — English, 简体中文, 繁體中文
-and 日本語 ship today, anything else falls back to English. `MACFAN_LANG=zh-Hans`
-overrides it (useful in scripts and in the self test). The CLI stays English on
-purpose: its output is compared byte for byte against the classic `smc` tool.
-
-**Writes and privileges.** Writing to the SMC needs root. Inside the app: if it
-already runs as root, or `SUDO_PASSWORD` is set, it asks the `macfan` CLI to do
-the write (the CLI handles sudo itself); otherwise the write goes through
-`osascript … with administrator privileges`, so macOS shows its normal
-authorisation dialog. No privileged helper, no code signing, no daemon. After
-the helper returns, the app re-reads the SMC and warns if the fans did not end
-up in the requested state — a write is asynchronous, so an exit code of 0 does
-not by itself mean it landed.
-
-**Launch at login** writes `~/Library/LaunchAgents/com.macfan.menubar.plist`
-(validated with `plutil -lint`) and leaves it unloaded, so ticking the box does
-not spawn a second copy of the app on the spot; launchd picks it up at the next
-login. `SMAppService` would be the modern route, but it wants a signed bundle,
-so that can wait until there is one. The same thing is scriptable:
-
-```sh
-macfan-menubar --login-status    # installed / not installed
-macfan-menubar --login-install
-macfan-menubar --login-remove
-```
-
-**Verification.** `macfan-menubar --selftest` builds the whole UI on the main
-thread, reads it back and exits: status item title, menu items and how many are
-wired to an action, the launch-agent round trip in a throwaway directory, and
-the speed-input parsing and clamping. Combine it with `MACFAN_LANG` to check
-every language. A screenshot is not available to an agent shell (no
-screen-recording permission), and "it started without crashing" would not have
-proven the wiring.
-
-### Startup
-
-By default the app starts without touching the fans: writing to the SMC needs
-root, which means an authorisation prompt, and that is not something to spring on
-someone at login.
-
-**Restore the last speed at launch** (off by default) remembers the setting that
-was last applied and puts it back when the app starts. It matters because sleep,
-reboot and closing the lid all hand the fans back to system control, so a forced
-speed otherwise lasts only until the machine catches its breath.
-
-Two details worth knowing:
-
-- It remembers the last setting that was *applied by this app*, not what the SMC
-  reports at launch. At launch that is always automatic, which would erase the
-  very thing being remembered.
-- A restore skips the write when the machine is already in that state, so the
-  authorisation prompt appears only when something would actually change.
-  Writes need root — measured: an unprivileged write fails with
-  `SMCWriteKey() = e00002c1` (not privileged).
-
-Measured end to end on an M2: fans handed back to the system (`Mode: auto`),
-setting armed, app relaunched → `Mode: forced`, target 7199.
-
-### App bundle and DMG
-
-```sh
-menubar/scripts/make-app.sh          # -> dist/macfan.app   (ad-hoc signed)
-menubar/scripts/make-dmg.sh          # -> dist/macfan-<version>.dmg
-```
-
-The bundle is what makes the icon, the app menu name and the alert artwork
-correct: a bare binary inherits the terminal's icon and `NSAlert` has no app
-icon to show. `make-app.sh` also copies `macfan` and `rsmc` into
-`Contents/MacOS/`, which is where the GUI looks for the CLI it drives.
-
-The icon comes from `menubar/assets/icon.svg` (rendered master:
-`assets/icon-1024.png`, regenerate with `scripts/make-icon.py`). Geometry
-follows the Big Sur grid — 824x824 artwork on a 1024 canvas with a 185.5 corner
-radius, transparency outside — so it sits correctly next to stock icons. The
-glyph is deliberately simple (four thick petals and a hub on a blue gradient)
-so it survives 16 px.
-
-**Installing.** Drag `macfan.app` into `/Applications`. That location matters:
-Launchpad indexes `/Applications` and `~/Applications`, not the folder you
-unpacked the DMG in, so an app left in `~/Downloads` will not show up there.
-
-**Gatekeeper.** Without a Developer ID the bundle is only ad-hoc signed, so a
-downloaded copy carries the quarantine flag and macOS refuses the first launch.
-Measured on macOS 15: launching a quarantined copy does nothing at all; after
-clearing the flag it starts normally. Clear it once:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/macfan.app
-open /Applications/macfan.app
-```
-
-The `-r` matters: the flag also sits on the binaries inside the bundle, and
-clearing it from the `.app` directory alone is not enough. The GUI equivalent is
-right-click → Open, and if macOS only offers "Done" then System Settings →
-Privacy & Security → "Open Anyway". A build from source never gets the flag at
-all. The DMG carries an install note with these same steps.
-
-A Homebrew cask is published — `brew install --cask greatyingzi/tap/macfan` —
-which makes install, upgrade (`brew upgrade --cask macfan`) and removal
-(`brew uninstall --cask --zap macfan`) one command each, and verifies the
-checksum on the way in.
-
-**Keeping the cask current.** Two paths, so it cannot quietly fall behind — which
-it did once: the tap sat at 0.2.0 while releases reached 0.2.5, and every user's
-`brew upgrade` said "already up to date" throughout.
-
-- **A release bumps it.** The release workflow clones the tap with a deploy key
-  (write access to that one repository — no personal token) and runs the same
-  `scripts/update-cask.sh` an operator would: it hashes the DMG that was actually
-  published, renders `scripts/cask-template.rb`, and reads the cask back.
-- **A schedule catches whatever a release missed.** The tap repository runs its
-  own job once a day, which needs no secret at all because a repository's token
-  can write to itself. If it cannot sync, it fails rather than reporting success.
-
-Both were tested by making the cask stale on purpose: the schedule brought 0.2.0
-back to 0.2.6, and the release workflow brought 0.2.1 back to 0.2.6.
-
-It does **not** remove the first-launch approval: measured on Homebrew 7, the
-cask deliberately applies the quarantine attribute to what it downloads (the
-old `--no-quarantine` flag no longer exists), so Gatekeeper still asks once. The
-same `xattr -dr` line above clears it. Only a Developer ID would remove that step
-for real.
-
+Keys are 4 characters, space padded (`FS!` works as well as `FS! `).
 
 # Technical
 
 ## How it works
 
 The SMC is reachable through the `AppleSMC` IOKit service. `rsmc` opens a
-connection and issues struct calls (selector `2`) carrying a `KeyData` struct:
-the key as a big-endian `u32`, a command byte (`5` read bytes, `6` write bytes,
-`8` read key by index, `9` read key info), the key's size/type, and a 32-byte
-payload. Reads are two calls — read key info to learn the payload size, then
-read the bytes; the size/type of a key never changes, so `rsmc` caches it.
+connection and issues struct calls (selector `2`) carrying a `KeyData` struct: the
+key as a big-endian `u32`, a command byte (`5` read bytes, `6` write bytes, `8`
+key by index, `9` key info), the key's size and type, and a 32-byte payload. A read
+is two calls — key info for the size, then the bytes — and the size never changes,
+so it is cached.
 
-Forcing a fan takes two writes: switch the fan to manual (`F0Md = 1`), then set
-the target speed (`F0Tg = <rpm as a 4-byte little-endian f32>`). `macfan auto`
-writes `F0Md = 0`. Fan count comes from `FNum`, and every per-fan key is
-addressed as `F<index><suffix>`, so machines with one, two or more fans all
-work and each fan is capped by its own maximum.
-
-The SMC applies a target-speed write a moment later (200–400 ms in practice),
-so writing and immediately reading back shows the *old* value. `macfan`
-therefore polls until the fans report the requested state before printing the
-status, and says so if the request never lands.
-
+Forcing a fan is two writes: `F0Md = 1` (manual), then `F0Tg` (target as a 4-byte
+little-endian f32); `auto` writes `F0Md = 0`. Fan count comes from `FNum` and
+per-fan keys are `F<index><suffix>`, so one, two or more fans all work, each capped
+by its own maximum. The SMC applies the write 200–400 ms later, so `macfan` polls
+until the fans report the requested state instead of trusting the exit code.
 
 ## Verification
 
-Parity work is in `scripts/parity-check.sh` (it runs the classic `smc` tool and
-`rsmc` side by side on live hardware):
+`scripts/parity-check.sh` runs the classic `smc` tool and `rsmc` side by side on
+live hardware:
 
 ```
   [1/4] -f fan dump        : identical (8 lines)
@@ -531,79 +225,55 @@ Parity work is in `scripts/parity-check.sh` (it runs the classic `smc` tool and
   PASS — no unexpected differences
 ```
 
-What that means, and how it was measured:
+Only keys that hold still through the measurement window are compared; each
+remaining mismatch is then read five times by both tools and counts as a real
+difference only if both readings are stable and differ. Anything that will not hold
+still is reported as uncomparable rather than counted as a pass. Writes were
+verified as a real round trip, and both slices of the universal binary were run
+(arm64 natively, x86_64 under Rosetta). Hardware used: MacBook Pro 13" M2 (macOS
+15, one fan; full parity, writes, both slices) and MacBook Pro 14" M1 Pro (macOS
+26, two fans; read-only fan decoding).
 
-- **Fan dump**: byte-identical, apart from the live current-speed line.
-- **Key enumeration**: same 1645 keys in the same order, and the key + type
-  columns are identical for all of them.
-- **Values**: only keys that hold still through the measurement window are
-  compared (the reference tool's two dumps bracket ours). Every remaining
-  mismatch is then re-read 5 times with each tool, and only counts as a real
-  difference when each tool's readings are themselves stable and the two values
-  differ. Both steps are needed: hundreds of keys drift between two dumps, and
-  keys like `aP70` — an internal counter that oscillates in a narrow band —
-  mismatch on virtually every single read without being a difference at all.
-  Anything that won't hold still is reported as uncomparable rather than being
-  quietly counted as a pass.
-- **Writes**: a real round trip was verified against the reference tool
-  (`macfan set 3000` → `smc -f` reports target 3000 → `macfan max` restores the
-  previous state), and idempotent writes were checked too.
-- **Both slices** of the universal binary run: arm64 natively, x86_64 under
-  Rosetta, each byte-identical to the reference on `-f`.
+The GUI has its own check: `macfan-menubar --selftest` builds the whole interface
+on the main thread, reads it back and exits — status item title, menu items and how
+many are wired to actions, the launch-agent round trip, the speed parsing, and the
+title/temperature wiring. `MACFAN_LANG` runs it in each language.
 
-Hardware this was developed and checked on: MacBook Pro 13" M2 (macOS 15,
-1 fan) — full parity, writes, both slices; MacBook Pro 14" M1 Pro (macOS 26,
-2 fans) — fan decoding verified read-only (both fans, per-fan limits).
+## Differences from the classic `smc` tool
 
+Three are deliberate; two fix defects.
 
-## Intentional differences from the classic `smc` tool
+1. **`si16` keys keep their sign.** The classic tool prints `ff 32` as `65330`
+   instead of `-206` (a host-order cast plus `ntohs`). `rsmc` prints `-206`.
+2. **Unreadable payloads say `unreadable`.** On a failed payload read the classic
+   tool prints `data_size` bytes from a buffer that can be smaller, i.e. adjacent
+   stack memory (one key here claims 117 bytes). `rsmc` prints the type and
+   `unreadable`.
+3. **`-v` reports this program's version**, not `0.01`.
+4. **A failure exits non-zero**, which scripts can act on.
+5. **Short keys are padded** (`-k FS!` == `-k FS! `), and `-kFNum` works.
 
-Four of these are deliberate; two fix defects in the classic tool.
-
-1. **`si16` keys keep their sign.** The classic tool casts the payload to a
-   host-order `int16`, byte-swaps it with `ntohs`, and prints the result as
-   unsigned, so `ff 32` prints as `65330` instead of `-206`. `rsmc` prints
-   `-206`.
-2. **Unreadable payloads say `unreadable`.** When a key's payload read fails,
-   the classic tool prints the key's type and then `data_size` bytes — but
-   `data_size` can exceed the 32-byte buffer, so it prints adjacent stack
-   memory (one key here claims 117 bytes). `rsmc` prints the type and
-   `unreadable` instead of inventing bytes.
-3. **`-v` reports this program's version** (the crate version), not `0.01`.
-4. **A failure exits non-zero.** The classic tool prints `Error: ...` and still
-   exits 0, which scripts cannot detect.
-5. **Short keys are padded** (`-k FS!` == `-k FS! `), and `-kFNum` (attached
-   argument) works like `-k FNum`.
-
-`macfan` is additive: the classic tool has no fan-control commands, and its
-`-t` prints nothing at all on Apple Silicon (no sensor there uses `sp78`),
-which is why `macfan temps` decodes the `flt` sensors Apple Silicon actually
-publishes.
-
+`macfan` is additive: the classic tool has no fan control, and its `-t` prints
+nothing on Apple Silicon because no sensor there uses `sp78` — which is why
+`macfan temps` decodes the `flt` sensors Apple Silicon actually publishes.
 
 ## Caveats
 
-- Writing to the SMC is writing to a system interface that Apple does not
-  document or support. Nothing here changes firmware or persistent state, and
-  a reboot always restores system fan control, but the usual warning applies:
-  use it at your own risk.
-- `macfan min` pins a fan at its lowest speed. Under sustained load that means
-  higher temperatures; `macfan auto` or a reboot gives control back.
-- SMC keys are machine-specific. Keys the code doesn't know (or that a given
-  Mac doesn't expose) are reported as `no data` / `unreadable` rather than
-  guessed at.
+- Writing to the SMC writes to an interface Apple does not document or support.
+  Nothing here changes firmware or persistent state, and a reboot always restores
+  system fan control — but the usual warning applies: use it at your own risk.
+- `macfan min` pins a fan at its lowest speed; under sustained load that means
+  higher temperatures. `macfan auto` or a reboot gives control back.
+- SMC keys are machine-specific. Unknown or absent keys are reported as
+  `no data` / `unreadable` rather than guessed at.
 
-
-## License and provenance
+## License
 
 MIT OR Apache-2.0 — see `LICENSE-MIT` and `LICENSE-APACHE`.
 
-This is an independent implementation. The IOKit selector numbers, command
-codes and the `KeyData` layout are interface facts required to talk to the
-kernel driver, and everything else — the client, the decoders, the CLI, the
-fan logic — was written for this crate; no code was copied or translated from
-another SMC project. For parity testing it compares its output against the
-classic `smc` tool (GPL-2.0, from hholtmann/smcFanControl) when that binary is
-present on the machine being tested; no GPL code or binary is included here.
-
----
+An independent implementation: the IOKit selector numbers, command codes and
+`KeyData` layout are interface facts needed to talk to the driver, and everything
+else was written for this crate. No code was copied or translated from another SMC
+project. Parity testing compares output against the classic `smc` tool (GPL-2.0,
+from hholtmann/smcFanControl) when that binary is present; no GPL code or binary is
+included here.
