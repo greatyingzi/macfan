@@ -467,12 +467,34 @@ publishes.
 
 ## Support
 
-macfan is a spare-time project: free, no telemetry, no feature gates. If it earns
-its keep and you feel like it, there is a [Ko-fi page](https://ko-fi.com/yingzi62662)
-— the **Sponsor** button at the top of this page points at the same place.
+macfan is written and maintained in spare time, and it is meant to stay usable by
+anyone: free, no telemetry, no account, no feature gated behind a payment.
+Everything the app can do, every user can do.
 
-Nothing is unlocked by donating. An issue or a pull request is genuinely more
-useful than a coffee.
+If it has earned a place on your menu bar and you want to say thanks, there is a
+[Ko-fi page](https://ko-fi.com/yingzi62662) (the **Sponsor** button at the top of
+this page points at the same place, and it reaches the same PayPal account).
+Tips are one-off, and they go towards the project's real costs rather than to
+anyone's income: an Apple Developer ID would remove the first-launch approval step
+for every user, and second-hand hardware would widen testing — the fan-control
+path is currently verified on a single M2 MacBook Pro.
+
+Nothing is unlocked by donating. No priority on issues, no extra features, no
+mention required. If you would rather not, that is the expected case and it
+changes nothing.
+
+Things that help more than money, roughly in order of how much:
+
+1. **Report what does not work.** A machine where `macfan status` prints the wrong
+   speed, where a key reads `unreadable`, or where the fan does not settle is the
+   most useful thing you can send. The README's *Verification* section says what is
+   already covered, so the gaps are visible.
+2. **Try it on hardware this project has never seen.** Intel Macs, desktops, and
+   two-fan laptops are untested by design — no machine here has them.
+3. **Star it, or link to it** where it fits.
+
+Supporters are not listed anywhere unless they ask to be, and there is no
+newsletter, no Discord, no tier to manage.
 
 ## License and provenance
 
@@ -504,9 +526,26 @@ macOS 上控制风扇 + 通用 SMC 工具，Rust 实现，两个二进制、零�
 
 ### 支持这个项目
 
-macfan 是业余时间写的：永久免费、无遥测、不做功能阉割。如果它帮到了你，这里有
-[Ko-fi 页面](https://ko-fi.com/yingzi62662)（页面右上角的 **Sponsor** 按钮指向同一处）；
-国内的读者通道还在准备中。
+macfan 是业余时间写的个人项目，定位是"任何人都能用"：免费、无遥测、不需要账号、
+不做付费才有的功能 —— 应用能做的事，所有用户都能做。
 
-打赏不解锁任何东西 —— 提个 issue 或 PR 其实比一杯咖啡有用。
+如果它在你菜单栏上留下来了，想表示一下：这里有 [Ko-fi 页面](https://ko-fi.com/yingzi62662)
+（页面右上角的 **Sponsor** 按钮指向同一处，收到的是同一个 PayPal 账户）。打赏是一次性的，
+会用在项目实际的开销上，而不是变成谁的收入：一个 Apple Developer ID 可以让所有用户
+免掉"首次启动要放行一次"这一步；添置二手机器可以扩大机型验证 —— 目前风扇控制路径
+只在一台 M2 MacBook Pro 上验证过。国内通道（爱发电）还在准备中。
+
+打赏不解锁任何东西：没有 issue 优先，没有额外功能，也不要求你署名。不打赏才是常态，
+而且不影响任何事情。
+
+比钱更有用的事，大致按价值排序：
+
+  1. 报告不工作的地方 —— 某台机器上 `macfan status` 转速不对、某个键读出 `unreadable`、
+     或者风扇没有落到目标转速，这些是最有价值的信息（README 的 *Verification* 一节写了
+     已经覆盖了什么，缺口因此是可见的）
+  2. 在没被验证过的硬件上试一下 —— Intel Mac、台式机、双风扇笔记本目前都还没测过
+  3. 点个 Star，或在合适的地方带上它
+
+支持者不会被列在任何地方（除非你自己要求），也没有 newsletter、没有 Discord、
+没有需要维护的会员档位。
 
