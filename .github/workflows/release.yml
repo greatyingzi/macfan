@@ -96,6 +96,9 @@ jobs:
       - name: Update the Homebrew cask
         env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+          # `gh` needs a token even for a public release: without one it is
+          # rate-limited by IP, which is how this step first failed.
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
