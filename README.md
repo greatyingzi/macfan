@@ -233,8 +233,16 @@ right-click → Open, and if macOS only offers "Done" then System Settings →
 Privacy & Security → "Open Anyway". A build from source never gets the flag at
 all. The DMG carries an install note with these same steps.
 
-A Homebrew cask would remove that step entirely (brew strips the flag); it is
-not published yet.
+A Homebrew cask is published — `brew install --cask greatyingzi/tap/macfan` —
+which makes install, upgrade (`brew upgrade --cask macfan`) and removal
+(`brew uninstall --cask --zap macfan`) one command each, and verifies the
+checksum on the way in.
+
+It does **not** remove the first-launch approval: measured on Homebrew 7, the
+cask deliberately applies the quarantine attribute to what it downloads (the
+old `--no-quarantine` flag no longer exists), so Gatekeeper still asks once. The
+same `xattr -dr` line above clears it. Only a Developer ID would remove that step
+for real.
 
 ## How it works
 

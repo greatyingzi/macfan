@@ -80,3 +80,28 @@ jobs:
             "rsmc-${V}-macos-universal" \
             SHA256SUMS
           gh release view "$VERSION" --json assets --jq '.assets[] | "  \(.name)  \(.size) bytes"'
+
+      - name: Update the Homebrew cask
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          V="${VERSION#v}"
+          SHA="$(shasum -a 256 "dist/macfan-${V}.dmg" | cut -d' ' -f1)"
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "secrets.TAP_TOKEN is not set — the cask is not updated."
+            echo "To automate it: create a token with repo scope for"
+            echo "greatyingzi/homebrew-tap and store it as TAP_TOKEN here."
+            echo "Meanwhile the cask can be bumped by hand:"
+            echo "  version ${V} / sha256 ${SHA}"
+            exit 0
+          fi
+          git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/greatyingzi/homebrew-tap.git" tap
+          cd tap
+          /usr/bin/sed -i '' -E "s/^  version \".*\"$/  version \"${V}\"/" Casks/macfan.rb
+          /usr/bin/sed -i '' -E "s/^  sha256 \".*\"$/  sha256 \"${SHA}\"/" Casks/macfan.rb
+          git -c user.name=greatyingzi -c user.email=greatyingzi@github.com \
+            commit -q -am "macfan ${V}"
+          git push -q
+          echo "cask updated to ${V} (${SHA})"

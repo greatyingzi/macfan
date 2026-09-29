@@ -40,6 +40,7 @@ macfan — 安装 / install
    如果 macOS 只说“无法打开”，去 系统设置 → 隐私与安全性 → 找到 macfan 的提示 → 点“仍要打开”。
 
 3. 之后就能正常双击启动，也会出现在启动台里。
+   （Homebrew 安装也一样：brew 会保留隔离属性，首次仍需放行一次。）
    After that it opens normally and shows up in Launchpad.
 
 为什么需要这一步：本 app 用 ad-hoc 签名（自签），没有 Apple 的开发者证书，
