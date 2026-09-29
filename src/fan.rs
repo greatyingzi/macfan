@@ -303,6 +303,26 @@ pub fn temperature_readings(smc: &Smc) -> Result<Vec<Reading>, Error> {
     Ok(out)
 }
 
+/// Highest of a few common core sensors, for the menu bar title.
+///
+/// Only a handful of keys are read — enumerating all 126 `T*` keys every couple
+/// of seconds would be wasteful for a single number. The chosen keys are the
+/// ones Apple's own tooling reports as CPU/SoC temperatures on Apple Silicon.
+pub fn sampled_max_temp(smc: &Smc) -> Option<f64> {
+    const CANDIDATES: [&str; 6] = ["Tp01", "Tp05", "Tp09", "Tp0A", "Tp0D", "TCHP"];
+    let mut best: Option<f64> = None;
+    for key in CANDIDATES {
+        let Ok(v) = smc.read(key) else { continue };
+        let Some((celsius, _)) = decode_temperature(&v.data_type, v.data_size, v.payload()) else {
+            continue;
+        };
+        if celsius > 0.0 {
+            best = Some(best.map_or(celsius, |b: f64| b.max(celsius)));
+        }
+    }
+    best
+}
+
 /// Temperature output in the classic tool's `-t` format: `sp78` keys only.
 ///
 /// Kept for drop-in compatibility — note that on Apple Silicon this prints

@@ -13,6 +13,7 @@
 
 pub mod decode;
 pub mod fan;
+pub mod json;
 pub mod smc;
 pub mod sudo;
 

@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use macfan::decode::{format_line, format_unreadable};
 use macfan::fan;
+use macfan::json::{self, Obj};
 use macfan::smc::{parse_hex, Error, Smc};
 use macfan::VERSION;
 
@@ -37,6 +38,7 @@ fn usage(prog: &str) {
     println!("    -r         : read the value of a key");
     println!("    -w <value> : write the specified value to a key");
     println!("    -v         : version");
+    println!("    --json     : machine-readable output instead of text");
     println!();
 }
 
@@ -49,6 +51,31 @@ fn print_call_error(what: &str, err: &Error) {
     }
 }
 
+/// One key and its payload as JSON.
+fn value_json(v: &macfan::smc::Value) -> String {
+    let mut obj = Obj::new();
+    obj.str_field("key", &v.key)
+        .str_field("type", &v.data_type)
+        .raw_field("size", json::number(f64::from(v.data_size)));
+    let bytes: Vec<String> = v
+        .payload()
+        .iter()
+        .map(|b| json::number(f64::from(*b)))
+        .collect();
+    obj.array_field("bytes", &bytes);
+    obj.raw_field("uint", json::number(v.as_uint() as f64));
+    // The same interpretation the text output uses. A `float` field only
+    // appears when the key's type really is a float — reinterpreting a ui32's
+    // bytes as f32 produces nonsense.
+    if let Some(decoded) = macfan::decode::decode(&v.data_type, v.data_size, v.payload()) {
+        obj.str_field("value", &decoded.to_string());
+        if let macfan::decode::Decoded::Float { value, .. } = decoded {
+            obj.raw_field("float", json::number(value));
+        }
+    }
+    obj.render()
+}
+
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().collect();
     let prog = argv.first().cloned().unwrap_or_else(|| "rsmc".into());
@@ -56,6 +83,7 @@ fn main() -> ExitCode {
     let mut op = Op::None;
     let mut key = String::new();
     let mut value: Vec<u8> = Vec::new();
+    let mut json_out = false;
 
     let mut i = 1;
     while i < argv.len() {
@@ -67,6 +95,11 @@ fn main() -> ExitCode {
         if arg == "--version" {
             println!("{VERSION}");
             return ExitCode::SUCCESS;
+        }
+        if arg == "--json" {
+            json_out = true;
+            i += 1;
+            continue;
         }
         if !arg.starts_with('-') || arg.len() < 2 {
             // The reference tool ignores bare words.
@@ -141,7 +174,13 @@ fn main() -> ExitCode {
     let smc = match Smc::open() {
         Ok(smc) => smc,
         Err(err) => {
-            println!("{err}");
+            if json_out {
+                let mut obj = Obj::new();
+                obj.str_field("error", &err.to_string());
+                println!("{}", obj.render());
+            } else {
+                println!("{err}");
+            }
             return ExitCode::from(1);
         }
     };
@@ -149,9 +188,55 @@ fn main() -> ExitCode {
     let mut ok = true;
     match op {
         Op::Fan => match fan::read_fans(&smc) {
+            Ok(fans) if json_out => {
+                let items: Vec<String> = fans
+                    .iter()
+                    .map(|f| {
+                        let mut obj = Obj::new();
+                        obj.raw_field("index", json::number(f.index as f64))
+                            .raw_field(
+                                "id",
+                                f.id.as_deref()
+                                    .map(json::string)
+                                    .unwrap_or_else(|| "null".into()),
+                            )
+                            .raw_field("current", json::number(f.current))
+                            .raw_field("minimum", json::number(f.min))
+                            .raw_field("maximum", json::number(f.max))
+                            .raw_field("safe", json::number(f.safe))
+                            .raw_field("target", json::number(f.target))
+                            .bool_field("forced", f.forced);
+                        obj.render()
+                    })
+                    .collect();
+                let mut obj = Obj::new();
+                obj.array_field("fans", &items);
+                println!("{}", obj.render());
+            }
             Ok(fans) => print!("{}", fan::render(&fans)),
             Err(err) => {
                 print_call_error("SMCPrintFans", &err);
+                ok = false;
+            }
+        },
+        Op::Temps if json_out => match fan::temperature_readings(&smc) {
+            Ok(readings) => {
+                let items: Vec<String> = readings
+                    .iter()
+                    .map(|r| {
+                        let mut obj = Obj::new();
+                        obj.str_field("key", &r.key)
+                            .str_field("kind", r.kind)
+                            .raw_field("celsius", json::number(r.celsius));
+                        obj.render()
+                    })
+                    .collect();
+                println!("{}", json::array(&items));
+            }
+            Err(err) => {
+                let mut obj = Obj::new();
+                obj.str_field("error", &err.to_string());
+                println!("{}", obj.render());
                 ok = false;
             }
         },
@@ -164,8 +249,10 @@ fn main() -> ExitCode {
         },
         Op::List => match smc.all_keys() {
             Ok(keys) => {
+                let mut json_items: Vec<String> = Vec::with_capacity(keys.len());
                 for k in keys {
                     match smc.read(&k) {
+                        Ok(v) if json_out => json_items.push(value_json(&v)),
                         Ok(v) => print!(
                             "{}",
                             format_line(&v.key, &v.data_type, v.data_size, &v.bytes)
@@ -177,13 +264,30 @@ fn main() -> ExitCode {
                                 .key_info(&k)
                                 .map(|info| macfan::smc::type_string(info.data_type))
                                 .unwrap_or_default();
-                            print!("{}", format_unreadable(&k, &ty));
+                            if json_out {
+                                let mut obj = Obj::new();
+                                obj.str_field("key", k.trim_end())
+                                    .str_field("type", ty.trim_end())
+                                    .bool_field("unreadable", true);
+                                json_items.push(obj.render());
+                            } else {
+                                print!("{}", format_unreadable(&k, &ty));
+                            }
                         }
                     }
                 }
+                if json_out {
+                    println!("{}", json::array(&json_items));
+                }
             }
             Err(err) => {
-                print_call_error("SMCPrintAll", &err);
+                if json_out {
+                    let mut obj = Obj::new();
+                    obj.str_field("error", &err.to_string());
+                    println!("{}", obj.render());
+                } else {
+                    print_call_error("SMCPrintAll", &err);
+                }
                 ok = false;
             }
         },
@@ -193,12 +297,19 @@ fn main() -> ExitCode {
                 ok = false;
             } else {
                 match smc.read(&key) {
+                    Ok(v) if json_out => println!("{}", value_json(&v)),
                     Ok(v) => print!(
                         "{}",
                         format_line(&v.key, &v.data_type, v.data_size, &v.bytes)
                     ),
                     Err(err) => {
-                        println!("{err}");
+                        if json_out {
+                            let mut obj = Obj::new();
+                            obj.str_field("error", &err.to_string());
+                            println!("{}", obj.render());
+                        } else {
+                            println!("{err}");
+                        }
                         ok = false;
                     }
                 }
@@ -208,9 +319,27 @@ fn main() -> ExitCode {
             if key.is_empty() {
                 println!("Error: specify a key to write");
                 ok = false;
-            } else if let Err(err) = smc.write(&key, &value) {
-                println!("{err}");
-                ok = false;
+            } else {
+                match smc.write(&key, &value) {
+                    Ok(()) if json_out => {
+                        let mut obj = Obj::new();
+                        obj.str_field("key", &macfan::smc::normalize_key(&key))
+                            .raw_field("bytes", json::number(value.len() as f64))
+                            .bool_field("written", true);
+                        println!("{}", obj.render());
+                    }
+                    Ok(()) => {}
+                    Err(err) => {
+                        if json_out {
+                            let mut obj = Obj::new();
+                            obj.str_field("error", &err.to_string());
+                            println!("{}", obj.render());
+                        } else {
+                            println!("{err}");
+                        }
+                        ok = false;
+                    }
+                }
             }
         }
         Op::None => unreachable!(),

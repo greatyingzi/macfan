@@ -139,3 +139,37 @@ fn macfan_rejects_unknown_options() {
     assert_eq!(out.status.code(), Some(2));
     assert!(stderr(&out).contains("unknown option --wat"));
 }
+
+#[test]
+fn rsmc_json_produces_a_json_object() {
+    // Without hardware the SMC open fails, so this asserts the shape in both
+    // worlds: either the fan object or an error object.
+    let out = rsmc(&["--json", "-f"]);
+    let text = stdout(&out);
+    assert!(text.starts_with('{'), "not JSON: {text:?}");
+    assert!(text.trim_end().ends_with('}'), "not JSON: {text:?}");
+    assert!(
+        text.contains("\"fans\"") || text.contains("\"error\""),
+        "unexpected JSON: {text:?}"
+    );
+}
+
+#[test]
+fn rsmc_json_key_read_is_an_object() {
+    let out = rsmc(&["--json", "-k", "FNum", "-r"]);
+    let text = stdout(&out);
+    assert!(text.starts_with('{') && text.trim_end().ends_with('}'));
+}
+
+#[test]
+fn rsmc_text_output_is_not_json() {
+    // The default must stay text: scripts compare it against the classic tool.
+    let out = rsmc(&["-f"]);
+    assert!(!stdout(&out).starts_with('{'));
+}
+
+#[test]
+fn rsmc_help_mentions_json() {
+    let out = rsmc(&["-h"]);
+    assert!(stdout(&out).contains("--json"));
+}

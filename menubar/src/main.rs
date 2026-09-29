@@ -31,8 +31,8 @@ use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
     NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
     NSApplicationDelegate, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSImage,
-    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSTextField, NSVariableStatusItemLength,
-    NSWindow, NSWindowDelegate,
+    NSMenu, NSMenuItem, NSPopUpButton, NSStatusBar, NSStatusItem, NSTextField,
+    NSVariableStatusItemLength, NSWindow, NSWindowDelegate,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -43,7 +43,7 @@ use macfan::fan::{self, Action};
 use macfan::smc::Smc;
 
 use i18n::{Lang, Strings};
-use settings::Settings;
+use settings::{Settings, TitleStyle, DEFAULT_PRESETS};
 
 const REFRESH_SECONDS: f64 = 2.0;
 
@@ -60,6 +60,8 @@ const TAG_REFRESH: isize = 9;
 const TAG_QUIT: isize = 10;
 const TAG_SETTINGS: isize = 11;
 const TAG_CUSTOM: isize = 12;
+/// First of the three preset entries (the others follow).
+const TAG_PRESET_0: isize = TAG_SET_3000;
 const TAG_STATE: isize = 13;
 const TAG_INFO: isize = 99;
 
@@ -86,6 +88,14 @@ struct Ivars {
     custom_item: RefCell<Option<Retained<NSMenuItem>>>,
     /// The "current state" line at the top of the menu.
     state_item: RefCell<Option<Retained<NSMenuItem>>>,
+    /// The status item glyph, when the running system has one.
+    symbol: RefCell<Option<Retained<NSImage>>>,
+    /// The three preset fields in the settings window.
+    preset_fields: RefCell<Vec<Retained<NSTextField>>>,
+    /// The menu bar title radio buttons.
+    style_buttons: RefCell<Vec<Retained<NSButton>>>,
+    /// The language picker.
+    language_popup: RefCell<Option<Retained<NSPopUpButton>>>,
 }
 
 define_class!(
@@ -177,6 +187,53 @@ define_class!(
             self.apply_settings();
         }
 
+        #[unsafe(method(applyPresets:))]
+        fn apply_presets(&self, _sender: Option<&NSButton>) {
+            let typed: Vec<String> = self
+                .ivars()
+                .preset_fields
+                .borrow()
+                .iter()
+                .map(|f| f.stringValue().to_string())
+                .collect();
+            match parse_presets(&typed) {
+                Some(presets) => {
+                    self.ivars().settings.borrow_mut().presets = presets;
+                    self.apply_settings();
+                    self.retitle_presets();
+                    self.refresh();
+                }
+                None => {
+                    let s = self.strings();
+                    let alert = NSAlert::new(self.mtm());
+                    alert.setMessageText(&NSString::from_str(s.invalid_number));
+                    alert.addButtonWithTitle(&NSString::from_str(s.ok));
+                    alert.runModal();
+                }
+            }
+        }
+
+        #[unsafe(method(titleStyleChanged:))]
+        fn title_style_changed(&self, sender: Option<&NSButton>) {
+            let Some(sender) = sender else { return };
+            let styles = TitleStyle::all();
+            if let Some(style) = styles.get(sender.tag().max(0) as usize) {
+                self.ivars().settings.borrow_mut().title_style = *style;
+                self.apply_settings();
+                self.refresh();
+            }
+        }
+
+        #[unsafe(method(languageChanged:))]
+        fn language_changed(&self, sender: Option<&NSPopUpButton>) {
+            let Some(sender) = sender else { return };
+            let index = sender.indexOfSelectedItem().max(0) as usize;
+            if let Some(tag) = window::language_tag(index) {
+                self.ivars().settings.borrow_mut().language = tag.map(str::to_string);
+                self.apply_settings();
+            }
+        }
+
         #[unsafe(method(refreshTimer:))]
         fn refresh_timer(&self, _timer: Option<&NSTimer>) {
             self.refresh();
@@ -191,13 +248,19 @@ impl Controller {
 
     fn refresh(&self) {
         let s = self.strings();
-        let text = match status_line(s, *self.ivars().compact_title.borrow()) {
+        let settings = self.ivars().settings.borrow().clone();
+        let text = match status_line(s, &settings) {
             Ok(line) => line,
             Err(err) => format!("{}: {err}", s.smc_unavailable),
         };
         if let Some(item) = self.ivars().item.borrow().as_ref() {
             if let Some(button) = item.button(self.mtm()) {
                 button.setTitle(&NSString::from_str(&text));
+                let glyph = match settings.title_style {
+                    TitleStyle::RpmOnly => None,
+                    _ => self.ivars().symbol.borrow().clone(),
+                };
+                button.setImage(glyph.as_deref());
             }
         }
         for (menu_item, line) in self.ivars().info.borrow().iter().zip(detail_lines(s)) {
@@ -205,6 +268,53 @@ impl Controller {
         }
         self.refresh_state_ticks();
         self.refresh_login_state();
+    }
+
+    /// Menu titles of the presets follow the settings.
+    fn retitle_presets(&self) {
+        let s = self.strings();
+        let presets = self.ivars().settings.borrow().presets;
+        for (tag, item) in self.ivars().actions.borrow().iter() {
+            if let Some(index) = preset_index(*tag) {
+                item.setTitle(&NSString::from_str(&s.preset(presets[index])));
+            }
+        }
+    }
+
+    /// Make the window's controls say what the settings say.
+    fn seed_controls(&self) {
+        let settings = self.ivars().settings.borrow().clone();
+        for (field, rpm) in self
+            .ivars()
+            .preset_fields
+            .borrow()
+            .iter()
+            .zip(settings.presets)
+        {
+            field.setStringValue(&NSString::from_str(&rpm.to_string()));
+        }
+        for button in self.ivars().style_buttons.borrow().iter() {
+            let index = TitleStyle::all()
+                .iter()
+                .position(|style| *style == settings.title_style);
+            let on = index == Some(button.tag().max(0) as usize);
+            button.setState(if on {
+                NSControlStateValueOn
+            } else {
+                NSControlStateValueOff
+            });
+        }
+        if let Some(popup) = self.ivars().language_popup.borrow().as_ref() {
+            let index = match settings.language.as_deref() {
+                None => 0,
+                Some(tag) => Lang::all()
+                    .iter()
+                    .position(|lang| lang.code() == tag)
+                    .map(|i| i + 1)
+                    .unwrap_or(0),
+            };
+            popup.selectItemAtIndex(index as isize);
+        }
     }
 
     /// Show the settings window (and bring the app forward so it is usable).
@@ -227,7 +337,7 @@ impl Controller {
 
     /// Push the current settings into the running app and persist them.
     fn apply_settings(&self) {
-        let mut settings = *self.ivars().settings.borrow();
+        let mut settings = self.ivars().settings.borrow().clone();
         if settings.normalise() {
             // Hiding every entry point would leave no way back in; the checkbox
             // state below gets corrected to match.
@@ -237,7 +347,7 @@ impl Controller {
             alert.addButtonWithTitle(&NSString::from_str(s.ok));
             alert.runModal();
         }
-        *self.ivars().settings.borrow_mut() = settings;
+        *self.ivars().settings.borrow_mut() = settings.clone();
 
         let app = NSApplication::sharedApplication(self.mtm());
         app.setActivationPolicy(if settings.show_dock_icon {
@@ -274,7 +384,10 @@ impl Controller {
     /// matching entry (or a custom-speed entry when the value is not a preset).
     fn refresh_state_ticks(&self) {
         let s = self.strings();
-        let mode = current_mode(&read_fans_or_empty());
+        let mode = current_mode(
+            &read_fans_or_empty(),
+            &self.ivars().settings.borrow().presets,
+        );
 
         if let Some(item) = self.ivars().state_item.borrow().as_ref() {
             let text = match mode {
@@ -309,10 +422,13 @@ impl Controller {
                 Mode::Max => *tag == TAG_MAX,
                 Mode::Min => *tag == TAG_MIN,
                 Mode::Preset(rpm) => {
-                    PRESETS
+                    self.ivars()
+                        .settings
+                        .borrow()
+                        .presets
                         .iter()
                         .position(|p| *p == rpm)
-                        .map(|i| TAG_SET_3000 + i as isize)
+                        .map(|i| TAG_PRESET_0 + i as isize)
                         == Some(*tag)
                 }
                 Mode::Custom(_) => *tag == TAG_CUSTOM,
@@ -472,8 +588,6 @@ fn status_item_image() -> Option<Retained<NSImage>> {
     None
 }
 
-/// Title for the menu bar: "<rpm> rpm" (plus a bolt when forced), and just
-/// "<rpm>" when a glyph already says what the number is.
 /// What the fans are doing right now, as a menu state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -485,15 +599,12 @@ enum Mode {
     Mixed,
 }
 
-/// Presets offered in the menu, in display order.
-const PRESETS: [u32; 3] = [3000, 4500, 6000];
-
 /// Classify the current fan state so the menu can tick the matching entry.
 ///
 /// Comparison is by value, not by "what was last clicked": if another tool (or
 /// the SMC itself) moves the fans, the ticks follow. One rpm of slack absorbs
 /// the SMC's rounding.
-fn current_mode(fans: &[fan::Fan]) -> Mode {
+fn current_mode(fans: &[fan::Fan], presets: &[u32; 3]) -> Mode {
     let near = |a: f64, b: f64| (a - b).abs() <= 1.0;
     if fans.is_empty() {
         return Mode::Mixed;
@@ -510,7 +621,7 @@ fn current_mode(fans: &[fan::Fan]) -> Mode {
     if fans.iter().all(|f| f.min > 0.0 && near(f.target, f.min)) {
         return Mode::Min;
     }
-    for preset in PRESETS {
+    for preset in presets.iter().copied() {
         if fans.iter().all(|f| near(f.target, f64::from(preset))) {
             return Mode::Preset(preset);
         }
@@ -522,20 +633,56 @@ fn current_mode(fans: &[fan::Fan]) -> Mode {
     Mode::Mixed
 }
 
-fn status_line(s: &Strings, compact: bool) -> Result<String, macfan::smc::Error> {
+/// Title for the menu bar, per the chosen style.
+///
+/// `IconRpm` relies on the glyph to say "speed", so it drops the " rpm" suffix;
+/// `RpmOnly` has no glyph and keeps it; `IconTemp` shows the highest sampled
+/// core temperature instead of the fan speed.
+fn status_line(s: &Strings, settings: &Settings) -> Result<String, macfan::smc::Error> {
     let smc = Smc::open()?;
+    if settings.title_style == TitleStyle::IconTemp {
+        return Ok(match fan::sampled_max_temp(&smc) {
+            Some(celsius) => format!("{celsius:.0}°C"),
+            None => s.no_fans.to_string(),
+        });
+    }
     let fans = fan::read_fans(&smc)?;
     if fans.is_empty() {
         return Ok(s.no_fans.to_string());
     }
     let speeds: Vec<String> = fans.iter().map(|f| format!("{:.0}", f.current)).collect();
     let forced = fans.iter().any(|f| f.forced);
+    let suffix = match settings.title_style {
+        TitleStyle::RpmOnly => " rpm",
+        _ => "",
+    };
     Ok(format!(
-        "{}{}{}",
+        "{}{}{suffix}",
         speeds.join("/"),
-        if forced { " ⚡" } else { "" },
-        if compact { "" } else { " rpm" }
+        if forced { " ⚡" } else { "" }
     ))
+}
+
+/// Index of a preset menu tag, if it is one.
+fn preset_index(tag: isize) -> Option<usize> {
+    let index = tag - TAG_PRESET_0;
+    (0..3).contains(&index).then_some(index as usize)
+}
+
+/// Parse the three preset fields; `None` when any of them is unusable.
+fn parse_presets(fields: &[String]) -> Option<[u32; 3]> {
+    if fields.len() < 3 {
+        return None;
+    }
+    let mut out = [0u32; 3];
+    for (index, text) in fields.iter().take(3).enumerate() {
+        let value: u32 = text.trim().parse().ok()?;
+        if !(settings::PRESET_MIN..=settings::PRESET_MAX).contains(&value) {
+            return None;
+        }
+        out[index] = value;
+    }
+    Some(out)
 }
 
 /// Detail lines shown at the top of the menu, one per fan.
@@ -753,7 +900,7 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         && checks
             .iter()
             .all(|c| c.target().is_some() && c.action().is_some());
-    let live = *controller.ivars().settings.borrow();
+    let live = controller.ivars().settings.borrow().clone();
     let ticked: Vec<String> = (0..labels.len())
         .filter_map(|index| {
             menu.itemAtIndex(index as isize)
@@ -763,7 +910,7 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         .collect();
     println!(
         "selftest: mode = {:?}, ticked = {ticked:?}",
-        current_mode(&read_fans_or_empty())
+        current_mode(&read_fans_or_empty(), &live.presets)
     );
     println!(
         "selftest: settings window = {}, checkboxes = {} {check_titles:?}",
@@ -786,12 +933,14 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         show_status_item: false,
         show_dock_icon: true,
         start_minimized: true,
+        ..Settings::default()
     };
     let settings_ok = wanted.save().is_ok() && Settings::load() == wanted;
     let mut both_hidden = Settings {
         show_status_item: false,
         show_dock_icon: false,
         start_minimized: false,
+        ..Settings::default()
     };
     let guard_ok = both_hidden.normalise() && both_hidden.show_status_item;
     println!(
@@ -833,7 +982,82 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     std::env::remove_var("MACFAN_AGENT_DIR");
     let _ = std::fs::remove_dir_all(&dir);
 
+    // Preset parsing.
+    let preset_cases: [(&[&str], bool); 4] = [
+        (&["3000", "4500", "6000"], true),
+        (&["2500", " 5000 ", "7000"], true),
+        (&["3000", "4500", "0"], false),
+        (&["3000", "abc", "6000"], false),
+    ];
+    let presets_ok = preset_cases.iter().all(|(fields, expected)| {
+        let owned: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+        parse_presets(&owned).is_some() == *expected
+    });
+    println!(
+        "selftest: preset parsing = {}/{} cases",
+        preset_cases
+            .iter()
+            .filter(|(fields, expected)| {
+                let owned: Vec<String> = fields.iter().map(|f| f.to_string()).collect();
+                parse_presets(&owned).is_some() == *expected
+            })
+            .count(),
+        preset_cases.len()
+    );
+
+    // Menu titles follow the settings, and the title style reaches the status
+    // item: set a custom preset triple, retitle, and read the menu back.
+    let original = controller.ivars().settings.borrow().clone();
+    controller.ivars().settings.borrow_mut().presets = [2000, 3333, 4444];
+    controller.retitle_presets();
+    let retitled: Vec<String> = (0..menu.numberOfItems())
+        .filter_map(|index| menu.itemAtIndex(index as isize))
+        .map(|item| item.title().to_string())
+        .filter(|title| title.contains("2000") || title.contains("3333") || title.contains("4444"))
+        .collect();
+    let retitle_ok = retitled.len() == 3;
+    println!("selftest: preset titles follow the settings = {retitled:?}");
+
+    let mut style_ok = true;
+    for style in TitleStyle::all() {
+        controller.ivars().settings.borrow_mut().title_style = style;
+        controller.refresh();
+        let shown = controller
+            .ivars()
+            .item
+            .borrow()
+            .as_ref()
+            .and_then(|item| item.button(controller.mtm()))
+            .map(|button| (button.title().to_string(), button.image().is_some()))
+            .unwrap_or_default();
+        let good = match style {
+            TitleStyle::RpmOnly => !shown.1 && shown.0.contains("rpm"),
+            TitleStyle::IconRpm => shown.1 && !shown.0.contains("rpm"),
+            TitleStyle::IconTemp => shown.1 && shown.0.contains("°C"),
+        };
+        println!(
+            "selftest: title style {:?} -> {:?} (glyph={}) {}",
+            style,
+            shown.0,
+            shown.1,
+            if good { "ok" } else { "FAILED" }
+        );
+        style_ok &= good;
+    }
+    // The empty status item case: on a machine with no fan, IconTemp falls back
+    // to a message rather than an empty title.
+    let languages_ok = (0..6).filter_map(window::language_tag).count() == 5
+        && window::language_tag(0) == Some(None);
+    println!("selftest: language picker maps 5 entries = {languages_ok}");
+    *controller.ivars().settings.borrow_mut() = original;
+    controller.retitle_presets();
+    controller.refresh();
+
     let ok = !title.is_empty()
+        && presets_ok
+        && retitle_ok
+        && style_ok
+        && languages_ok
         && bogus_ok
         && healed
         && labels.len() >= 15
@@ -921,10 +1145,14 @@ fn main() {
     }
     *controller.ivars().window.borrow_mut() = Some(settings_window.window);
     *controller.ivars().checks.borrow_mut() = settings_window.checks;
+    *controller.ivars().preset_fields.borrow_mut() = settings_window.preset_fields;
+    *controller.ivars().style_buttons.borrow_mut() = settings_window.style_buttons;
+    *controller.ivars().language_popup.borrow_mut() = Some(settings_window.language_popup);
 
     let status_bar = NSStatusBar::systemStatusBar();
     let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
     let symbol = status_item_image();
+    *controller.ivars().symbol.borrow_mut() = symbol.clone();
     if let Some(button) = status_item.button(mtm) {
         button.setTitle(ns_string!("macfan"));
         if let Some(image) = symbol.as_ref() {
@@ -991,7 +1219,7 @@ fn main() {
         .iter()
         .enumerate()
     {
-        collect(add(&s.preset(PRESETS[index]), *tag, ""), *tag);
+        collect(add(&s.preset(DEFAULT_PRESETS[index]), *tag, ""), *tag);
     }
     // The custom entry belongs with the presets: it is the same kind of choice
     // (a fixed speed), and placing it after the dialog put the tick one row
@@ -1016,6 +1244,8 @@ fn main() {
     }
 
     controller.apply_settings();
+    controller.seed_controls();
+    controller.retitle_presets();
     controller.refresh();
 
     if std::env::args().any(|a| a == "--selftest") {

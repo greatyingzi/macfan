@@ -146,6 +146,9 @@ then:
 | Set speed… | dialog with an input field, validated and clamped to the machine's range |
 | Set 3000 / 4500 / 6000 rpm | one-click presets |
 | Launch at login | tick to install a per-user LaunchAgent |
+| Preset speeds | three editable fields, applied with the Apply button — the menu and its ticks follow them |
+| Menu bar shows | icon + speed / speed only / icon + temperature (the highest of a few core sensors) |
+| Language | follows the system by default; the picker overrides it on the next launch |
 | Refresh | re-read the fans now (otherwise every 2 s) |
 | Quit | |
 
