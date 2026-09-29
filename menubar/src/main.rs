@@ -25,6 +25,7 @@ mod window;
 
 use std::cell::RefCell;
 use std::process::Command;
+use std::time::Instant;
 
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -48,6 +49,9 @@ use settings::{Settings, TitleStyle, DEFAULT_PRESETS};
 use style::Slot;
 
 const REFRESH_SECONDS: f64 = 2.0;
+/// Time constant of the temperature moving average, in seconds. Long enough to
+/// steady a flickering reading, short enough to notice a workload starting.
+const TEMP_REFRESH_SECONDS: f64 = 15.0;
 
 // Menu item tags: one selector handles them all.
 const TAG_MAX: isize = 1;
@@ -73,6 +77,29 @@ const TAG_SET_STATUS_ITEM: isize = 20;
 const TAG_SET_DOCK_ICON: isize = 21;
 const TAG_SET_LAUNCH_LOGIN: isize = 22;
 const TAG_SET_START_MINIMIZED: isize = 23;
+
+/// A sensor family shown in the menu: its keys (discovered once, they do not
+/// change while the machine is up), its own smoothing, and its menu row.
+struct Watched {
+    group: fan::SensorGroup,
+    keys: Vec<String>,
+    smoother: fan::Smoothed,
+    last: Option<Instant>,
+    item: Retained<NSMenuItem>,
+}
+
+/// The families the menu shows. CPU first: it is the one the title reports, and
+/// the one that reacts first when the machine gets busy.
+const WATCHED: [fan::SensorGroup; 8] = [
+    fan::SensorGroup::Cpu,
+    fan::SensorGroup::CpuDie,
+    fan::SensorGroup::Gpu,
+    fan::SensorGroup::Heatsink,
+    fan::SensorGroup::Ssd,
+    fan::SensorGroup::Memory,
+    fan::SensorGroup::Battery,
+    fan::SensorGroup::Wireless,
+];
 
 #[derive(Default)]
 struct Ivars {
@@ -103,6 +130,8 @@ struct Ivars {
     subtitle: RefCell<Option<Retained<NSTextField>>>,
     /// Temperature line in the menu.
     temperature: RefCell<Option<Retained<NSMenuItem>>>,
+    /// The sensor families under the temperature row, with their smoothing.
+    watched: RefCell<Vec<Watched>>,
 }
 
 define_class!(
@@ -253,10 +282,64 @@ impl Controller {
         i18n::strings(*self.ivars().lang.borrow())
     }
 
+    /// Update every watched family; return the CPU reading for the title.
+    ///
+    /// Each family is smoothed with its own moving average and coloured against
+    /// its own thresholds: 45 °C is worth flagging on a battery and unremarkable
+    /// on a CPU rail. The peak is kept alongside the smoothed value, because a
+    /// spike that has already passed is what someone watching wants to know.
+    fn refresh_temperatures(&self, s: &Strings) -> Option<(f64, f64)> {
+        let smc = Smc::open().ok()?;
+        let lang = *self.ivars().lang.borrow();
+        let now = Instant::now();
+        let mut cpu = None;
+        for watched in self.ivars().watched.borrow_mut().iter_mut() {
+            let Some(stats) = fan::stats_of(&smc, &watched.keys) else {
+                continue;
+            };
+            let elapsed = watched
+                .last
+                .map(|last| (now - last).as_secs_f64())
+                .unwrap_or(0.0);
+            watched.last = Some(now);
+            let smoothed = watched.smoother.push(
+                stats.max,
+                if elapsed > 0.0 {
+                    elapsed
+                } else {
+                    REFRESH_SECONDS
+                },
+            );
+            let peak = watched.smoother.peak().unwrap_or(smoothed);
+            let slot = match macfan::sensors::verdict(watched.group, smoothed) {
+                macfan::sensors::Verdict::Fine => Slot::Body,
+                macfan::sensors::Verdict::Warm | macfan::sensors::Verdict::Hot => Slot::Warm,
+            };
+            let mut pieces = vec![
+                (
+                    format!("{}  ", i18n::group_label(lang, watched.group)),
+                    Slot::Muted,
+                ),
+                (format!("{smoothed:.0}°C"), slot),
+            ];
+            if peak - smoothed >= 3.0 {
+                pieces.push((format!("   {} {peak:.0}°C", s.peak_label), Slot::Muted));
+            }
+            watched
+                .item
+                .setAttributedTitle(Some(&style::attributed(&pieces)));
+            if watched.group == fan::SensorGroup::Cpu {
+                cpu = Some((smoothed, peak));
+            }
+        }
+        cpu
+    }
+
     fn refresh(&self) {
         let s = self.strings();
         let settings = self.ivars().settings.borrow().clone();
-        let text = match status_line(s, &settings) {
+        let cpu_temp = self.refresh_temperatures(s);
+        let text = match status_line(s, &settings, cpu_temp) {
             Ok(line) => line,
             Err(err) => format!("{}: {err}", s.smc_unavailable),
         };
@@ -275,18 +358,13 @@ impl Controller {
             menu_item.setAttributedTitle(Some(&style::attributed_line(&line, Slot::Muted)));
         }
         if let Some(item) = self.ivars().temperature.borrow().as_ref() {
-            item.setAttributedTitle(Some(&temperature_title(s)));
+            item.setAttributedTitle(Some(&temperature_title(s, cpu_temp)));
         }
         if let Some(subtitle) = self.ivars().subtitle.borrow().as_ref() {
             subtitle.setAttributedStringValue(&status_title(
                 s,
                 &self.ivars().settings.borrow().clone(),
             ));
-            let mode = current_mode(
-                &read_fans_or_empty(),
-                &self.ivars().settings.borrow().presets,
-            );
-            let _ = mode;
         }
         self.refresh_state_ticks();
         self.refresh_login_state();
@@ -648,11 +726,15 @@ fn current_mode(fans: &[fan::Fan], presets: &[u32; 3]) -> Mode {
 /// `IconRpm` relies on the glyph to say "speed", so it drops the " rpm" suffix;
 /// `RpmOnly` has no glyph and keeps it; `IconTemp` shows the highest sampled
 /// core temperature instead of the fan speed.
-fn status_line(s: &Strings, settings: &Settings) -> Result<String, macfan::smc::Error> {
+fn status_line(
+    s: &Strings,
+    settings: &Settings,
+    cpu_temp: Option<(f64, f64)>,
+) -> Result<String, macfan::smc::Error> {
     let smc = Smc::open()?;
     if settings.title_style == TitleStyle::IconTemp {
-        return Ok(match fan::sampled_max_temp(&smc) {
-            Some(celsius) => format!("{celsius:.0}°C"),
+        return Ok(match cpu_temp {
+            Some((smoothed, _)) => format!("{smoothed:.0}°C"),
             None => s.no_fans.to_string(),
         });
     }
@@ -686,24 +768,29 @@ fn mode_text(s: &Strings, mode: Mode) -> String {
     }
 }
 
-/// Temperature line for the menu: the highest sampled core sensor, in the
-/// warm colour once the reading is worth noticing.
-fn temperature_title(s: &Strings) -> Retained<NSMutableAttributedString> {
-    let Some(celsius) = Smc::open().ok().and_then(|smc| fan::sampled_max_temp(&smc)) else {
+/// One-line summary for the settings window: mode and the current speeds.
+/// The temperature row: smoothed CPU value, with the peak when it is meaningfully
+/// higher (a spike that has passed still matters).
+fn temperature_title(s: &Strings, cpu: Option<(f64, f64)>) -> Retained<NSMutableAttributedString> {
+    let Some((smoothed, peak)) = cpu else {
         return style::attributed(&[(format!("{}: —", s.temperature_label), Slot::Muted)]);
     };
-    let value_slot = if celsius >= 85.0 {
+    let value_slot = if smoothed >= 85.0 {
         Slot::Warm
     } else {
         Slot::Body
     };
-    style::attributed(&[
-        (format!("{}: ", s.temperature_label), Slot::Muted),
-        (format!("{celsius:.0}°C"), value_slot),
-    ])
+    let mut pieces = vec![
+        (format!("{} ", s.temperature_label), Slot::Muted),
+        (format!("{smoothed:.0}°C"), value_slot),
+        ("  CPU".to_string(), Slot::Muted),
+    ];
+    if peak - smoothed >= 3.0 {
+        pieces.push((format!("   {} {peak:.0}°C", s.peak_label), Slot::Muted));
+    }
+    style::attributed(&pieces)
 }
 
-/// One-line summary for the settings window: mode and the current speeds.
 fn status_title(s: &Strings, settings: &Settings) -> Retained<NSMutableAttributedString> {
     let fans = read_fans_or_empty();
     if fans.is_empty() {
@@ -1041,7 +1128,17 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     let _ = std::fs::remove_file(&settings_file);
 
     // A missing CLI must come back as an error, not as silence.
+    //
+    // The unattended path is forced for this check: without it the helper falls
+    // back to `osascript ... with administrator privileges`, which pops a
+    // password dialog and waits forever when the self test runs headless.
+    let had_password = std::env::var("SUDO_PASSWORD").ok();
+    std::env::set_var("SUDO_PASSWORD", "selftest-placeholder");
     let bogus = run_cli_at("/nonexistent/macfan", &["max"]);
+    match &had_password {
+        Some(value) => std::env::set_var("SUDO_PASSWORD", value),
+        None => std::env::remove_var("SUDO_PASSWORD"),
+    }
     println!(
         "selftest: failing command surfaces an error = {}",
         if bogus.is_err() { "ok" } else { "FAILED" }
@@ -1107,6 +1204,40 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     let retitle_ok = retitled.len() == 3;
     println!("selftest: preset titles follow the settings = {retitled:?}");
 
+    // The temperature row opens a submenu: one line per family, each carrying a
+    // reading once refresh has run.
+    let temp_rows: Vec<String> = (0..menu.numberOfItems())
+        .filter_map(|index| menu.itemAtIndex(index as isize))
+        .find(|item| item.tag() == TAG_TEMP)
+        .and_then(|item| item.submenu())
+        .map(|submenu| {
+            (0..submenu.numberOfItems())
+                .filter_map(|index| submenu.itemAtIndex(index as isize))
+                .map(|row| {
+                    row.attributedTitle()
+                        .map(|title| title.string().to_string())
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let families_ok = temp_rows.len() == WATCHED.len()
+        && temp_rows.iter().all(|row| !row.trim().is_empty())
+        && (controller
+            .ivars()
+            .watched
+            .borrow()
+            .iter()
+            .all(|watched| watched.keys.is_empty())
+            || temp_rows.iter().any(|row| row.contains("°C")));
+    println!(
+        "selftest: temperature families = {} ({families_ok})",
+        temp_rows.len()
+    );
+    for row in &temp_rows {
+        println!("selftest:   {row}");
+    }
+
     // A CI runner has no SMC, so the hardware-dependent expectations are
     // conditional: assert the *rules*, not the readings.
     let hardware = !read_fans_or_empty().is_empty();
@@ -1161,6 +1292,7 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         && retitle_ok
         && style_ok
         && icons_ok
+        && families_ok
         && languages_ok
         && bogus_ok
         && healed
@@ -1293,6 +1425,38 @@ fn main() {
     temperature_item.setTag(TAG_TEMP);
     temperature_item.setEnabled(false);
     menu.addItem(&temperature_item);
+
+    // One line per family, each judged against its own thresholds. A submenu
+    // rather than more top-level rows: the menu stays short, and the detail is
+    // one hover away.
+    let temperature_menu = NSMenu::new(mtm);
+    temperature_menu.setTitle(&NSString::from_str(s.temperature_label));
+    let mut watched = Vec::new();
+    for group in WATCHED {
+        let row = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                mtm.alloc(),
+                &NSString::from_str(i18n::group_label(lang, group)),
+                None,
+                ns_string!(""),
+            )
+        };
+        row.setEnabled(false);
+        temperature_menu.addItem(&row);
+        let keys = Smc::open()
+            .ok()
+            .and_then(|smc| fan::keys_in_group(&smc, group).ok())
+            .unwrap_or_default();
+        watched.push(Watched {
+            group,
+            keys,
+            smoother: fan::Smoothed::new(TEMP_REFRESH_SECONDS),
+            last: None,
+            item: row,
+        });
+    }
+    temperature_item.setSubmenu(Some(&temperature_menu));
+    *controller.ivars().watched.borrow_mut() = watched;
     *controller.ivars().temperature.borrow_mut() = Some(temperature_item);
 
     for (index, line) in detail_lines(s).iter().enumerate() {

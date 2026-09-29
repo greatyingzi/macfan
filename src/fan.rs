@@ -250,38 +250,11 @@ pub fn wait_until_settled(
     }
 }
 
-/// One temperature sensor.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Reading {
-    /// SMC key.
-    pub key: String,
-    /// Sensor reading in degrees Celsius.
-    pub celsius: f64,
-    /// Encoding the sensor uses: `"flt"` on Apple Silicon, `"sp78"` on Intel.
-    pub kind: &'static str,
-}
-
-/// Decode a temperature payload.
-///
-/// Apple Silicon publishes temperatures as 4-byte little-endian floats; Intel
-/// Macs use 16-bit `sp78` fixed point (1/256 °C steps, signed).
-fn decode_temperature(
-    data_type: &str,
-    data_size: u32,
-    bytes: &[u8],
-) -> Option<(f64, &'static str)> {
-    match (data_type, data_size) {
-        ("flt ", 4) => Some((
-            f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
-            "flt",
-        )),
-        ("sp78", 2) => Some((
-            f64::from(i16::from_be_bytes([bytes[0], bytes[1]])) / 256.0,
-            "sp78",
-        )),
-        _ => None,
-    }
-}
+/// Temperature sensors live in [`crate::sensors`]; these re-exports keep the
+/// call sites that predate the split working.
+pub use crate::sensors::{
+    keys_in as keys_in_group, stats_of, Group as SensorGroup, Reading, Smoothed, Stats as TempStats,
+};
 
 /// Every readable temperature sensor on this machine, sorted by key.
 pub fn temperature_readings(smc: &Smc) -> Result<Vec<Reading>, Error> {
@@ -290,10 +263,12 @@ pub fn temperature_readings(smc: &Smc) -> Result<Vec<Reading>, Error> {
         if !key.starts_with('T') {
             continue;
         }
-        let Ok(v) = smc.read(&key) else { continue };
-        if let Some((celsius, kind)) = decode_temperature(&v.data_type, v.data_size, v.payload()) {
+        let Ok(value) = smc.read(&key) else { continue };
+        if let Some((celsius, kind)) =
+            crate::decode::temperature(&value.data_type, value.data_size, value.payload())
+        {
             out.push(Reading {
-                key: v.key,
+                key: value.key,
                 celsius,
                 kind,
             });
@@ -303,24 +278,13 @@ pub fn temperature_readings(smc: &Smc) -> Result<Vec<Reading>, Error> {
     Ok(out)
 }
 
-/// Highest of a few common core sensors, for the menu bar title.
+/// The hottest CPU sensor, for callers that want a single number.
 ///
-/// Only a handful of keys are read — enumerating all 126 `T*` keys every couple
-/// of seconds would be wasteful for a single number. The chosen keys are the
-/// ones Apple's own tooling reports as CPU/SoC temperatures on Apple Silicon.
+/// Reads only the CPU family (27 keys rather than all 126). Preferred over the
+/// SMC's own `TCMz` aggregate because the family's membership is explicit here.
 pub fn sampled_max_temp(smc: &Smc) -> Option<f64> {
-    const CANDIDATES: [&str; 6] = ["Tp01", "Tp05", "Tp09", "Tp0A", "Tp0D", "TCHP"];
-    let mut best: Option<f64> = None;
-    for key in CANDIDATES {
-        let Ok(v) = smc.read(key) else { continue };
-        let Some((celsius, _)) = decode_temperature(&v.data_type, v.data_size, v.payload()) else {
-            continue;
-        };
-        if celsius > 0.0 {
-            best = Some(best.map_or(celsius, |b: f64| b.max(celsius)));
-        }
-    }
-    best
+    let keys = crate::sensors::keys_in(smc, crate::sensors::Group::Cpu).ok()?;
+    crate::sensors::stats_of(smc, &keys).map(|stats| stats.max)
 }
 
 /// Temperature output in the classic tool's `-t` format: `sp78` keys only.
@@ -451,27 +415,6 @@ mod tests {
         assert!(satisfied(Action::Auto, &before, &after));
         // An empty reading is never "satisfied".
         assert!(!satisfied(Action::Auto, &before, &[]));
-    }
-
-    #[test]
-    fn temperature_decoding_covers_both_encodings() {
-        // Apple Silicon: 4-byte little-endian float, 35.0 °C.
-        let mut b = [0u8; 32];
-        b[..4].copy_from_slice(&35.0f32.to_le_bytes());
-        assert_eq!(decode_temperature("flt ", 4, &b), Some((35.0, "flt")));
-        // Intel: sp78 fixed point, 30.5 °C.
-        assert_eq!(
-            decode_temperature("sp78", 2, &[0x1e, 0x80]),
-            Some((30.5, "sp78"))
-        );
-        // Negative sp78.
-        assert_eq!(
-            decode_temperature("sp78", 2, &[0xe1, 0x80]),
-            Some((-30.5, "sp78"))
-        );
-        // Anything else is not a temperature.
-        assert_eq!(decode_temperature("ui16", 2, &[0x00, 0x10]), None);
-        assert_eq!(decode_temperature("flt ", 2, &[0, 0]), None);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use macfan::fan::{self, Action, Fan, Write};
 use macfan::smc::{Error, Smc};
-use macfan::{sudo, VERSION};
+use macfan::{sensors, sudo, VERSION};
 
 fn help(prog: &str) -> String {
     format!(
@@ -22,7 +22,9 @@ Usage:
   {prog} min             force all fans to their own minimum speed
   {prog} set <rpm>       force all fans to <rpm> (capped per fan)
   {prog} auto            hand the fans back to the system
-  {prog} temps           list temperature sensors (°C)
+  {prog} temps           temperature by group, with each family's threshold
+  {prog} temps <group>   one family (cpu, gpu, heatsink, ssd, memory, battery, …)
+  {prog} temps --all     every individual sensor, named
   {prog} list            raw fan dump (alias of status)
   {prog} -V, --version   print version
   {prog} -h, --help      print this help
@@ -37,6 +39,15 @@ Notes:
     system control. Use `auto` to give it back immediately.
 "
     )
+}
+
+/// A one-word mark for how a reading stands against its group's thresholds.
+fn mark(verdict: sensors::Verdict) -> &'static str {
+    match verdict {
+        sensors::Verdict::Fine => "",
+        sensors::Verdict::Warm => "  warm",
+        sensors::Verdict::Hot => "  HOT",
+    }
 }
 
 fn open_smc() -> Result<Smc, ExitCode> {
@@ -67,30 +78,87 @@ fn show_status() -> ExitCode {
     }
 }
 
-fn show_temps() -> ExitCode {
+fn show_temps(args: &[String]) -> ExitCode {
     let smc = match open_smc() {
         Ok(smc) => smc,
         Err(code) => return code,
     };
-    match fan::temperature_readings(&smc) {
-        Ok(readings) => {
-            if readings.is_empty() {
-                println!("this Mac exposes no readable temperature sensors");
-            } else {
-                for r in &readings {
-                    println!("  {:<4}  {:>6.1} °C", r.key, r.celsius);
-                }
-                println!("  {} sensors", readings.len());
-            }
-            ExitCode::SUCCESS
-        }
+    let readings = match fan::temperature_readings(&smc) {
+        Ok(readings) => readings,
         Err(err) => {
             eprintln!("{err}");
-            ExitCode::from(1)
+            return ExitCode::from(1);
         }
-    }
-}
+    };
+    let all = args.iter().any(|a| a == "--all");
+    // A group name as the first argument filters the listing.
+    let filter = args.iter().find(|a| !a.starts_with('-')).and_then(|name| {
+        sensors::SPECS
+            .iter()
+            .find(|(_, spec)| spec.id == name.as_str())
+            .map(|(group, _)| *group)
+    });
 
+    if !all {
+        // Grouped: "the temperature" is several different numbers, and the
+        // group is the only thing that makes them comparable. See
+        // sensors::SPECS for what each family measures and how it was verified.
+        let groups: Vec<(sensors::Group, sensors::Stats)> = sensors::summary(&readings)
+            .into_iter()
+            .filter(|(group, _)| filter.map_or(true, |wanted| *group == wanted))
+            .collect();
+        if groups.is_empty() {
+            println!("no readable temperature sensors");
+            return ExitCode::SUCCESS;
+        }
+        println!(
+            "  {:<16}{:>4}  {:>9}  {:>9}   state",
+            "group", "n", "max", "mean"
+        );
+        for (group, stats) in groups {
+            let spec = sensors::spec(group);
+            println!(
+                "  {:<16}{:>4}  {:>7.1} °C  {:>7.1} °C   {}{}",
+                spec.label,
+                stats.count,
+                stats.max,
+                stats.mean,
+                match stats.verdict(group) {
+                    sensors::Verdict::Fine => "ok",
+                    sensors::Verdict::Warm => "warm",
+                    sensors::Verdict::Hot => "HOT",
+                },
+                if spec.primary { "" } else { "  (secondary)" }
+            );
+        }
+        println!("  (per-sensor list: macfan temps --all; one family: macfan temps gpu)");
+        return ExitCode::SUCCESS;
+    }
+
+    let shown: Vec<&fan::Reading> = readings
+        .iter()
+        .filter(|r| filter.map_or(true, |wanted| sensors::group_of(&r.key) == wanted))
+        .collect();
+    if shown.is_empty() {
+        println!("no readable temperature sensors");
+        return ExitCode::SUCCESS;
+    }
+    for r in &shown {
+        let group = sensors::group_of(&r.key);
+        println!(
+            "  {:<5} {:>7.1} °C  {:<34}{}",
+            r.key,
+            r.celsius,
+            sensors::describe(&r.key),
+            mark(sensors::verdict(group, r.celsius))
+        );
+    }
+    println!(
+        "  {} sensors (temperatures are Celsius; names are the family's, not a per-model claim)",
+        shown.len()
+    );
+    ExitCode::SUCCESS
+}
 fn apply(smc: &Smc, writes: &[Write]) -> Result<(), Error> {
     for w in writes {
         smc.write(&w.key, &w.bytes)?;
@@ -166,6 +234,8 @@ fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
             "--no-sudo" => no_sudo = true,
+            // Passed through to the temps command.
+            "--all" => rest.push("--all".to_string()),
             other if other.starts_with("--") => {
                 eprintln!("Error: unknown option {other}");
                 return ExitCode::from(2);
@@ -178,7 +248,7 @@ fn main() -> ExitCode {
     let command = command.unwrap_or_else(|| "status".to_string());
     match command.as_str() {
         "status" | "list" => show_status(),
-        "temps" | "temperature" | "temperatures" => show_temps(),
+        "temps" | "temperature" | "temperatures" => show_temps(&rest),
         "max" => control(Action::Max, args, no_sudo),
         "min" => control(Action::Min, args, no_sudo),
         "auto" => control(Action::Auto, args, no_sudo),

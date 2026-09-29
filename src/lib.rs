@@ -14,6 +14,7 @@
 pub mod decode;
 pub mod fan;
 pub mod json;
+pub mod sensors;
 pub mod smc;
 pub mod sudo;
 

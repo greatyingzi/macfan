@@ -139,6 +139,8 @@ pub struct Strings {
     pub section_app: &'static str,
     /// Label for the temperature line in the menu.
     pub temperature_label: &'static str,
+    /// Label for the peak temperature within the smoothing window.
+    pub peak_label: &'static str,
     /// Menu item: re-read the fans.
     pub refresh: &'static str,
     /// Menu item: quit.
@@ -201,6 +203,7 @@ const EN: Strings = Strings {
     section_menu_bar: "MENU BAR",
     section_app: "APPLICATION",
     temperature_label: "Temperature",
+    peak_label: "peak",
     refresh: "Refresh",
     quit: "Quit",
     dialog_title: "Set fan speed",
@@ -247,6 +250,7 @@ const ZH_HANS: Strings = Strings {
     section_menu_bar: "菜单栏",
     section_app: "应用",
     temperature_label: "温度",
+    peak_label: "ピーク",
     refresh: "刷新",
     quit: "退出",
     dialog_title: "设置风扇转速",
@@ -293,6 +297,7 @@ const ZH_HANT: Strings = Strings {
     section_menu_bar: "選單列",
     section_app: "應用",
     temperature_label: "溫度",
+    peak_label: "峰值",
     refresh: "重新整理",
     quit: "結束",
     dialog_title: "設定風扇轉速",
@@ -339,6 +344,7 @@ const JA: Strings = Strings {
     section_menu_bar: "メニューバー",
     section_app: "アプリケーション",
     temperature_label: "温度",
+    peak_label: "峰值",
     refresh: "更新",
     quit: "終了",
     dialog_title: "ファン回転数を設定",
@@ -416,6 +422,69 @@ impl Strings {
     }
 }
 
+/// Localized name of a sensor family.
+///
+/// Kept as a function rather than a field per language: the families are a
+/// closed set from the library, and a match makes a missing translation a
+/// compile error rather than an empty string.
+pub fn group_label(lang: Lang, group: macfan::sensors::Group) -> &'static str {
+    use macfan::sensors::Group;
+    match (lang, group) {
+        (Lang::En, Group::Cpu) => "CPU",
+        (Lang::En, Group::CpuDie) => "CPU die",
+        (Lang::En, Group::Gpu) => "GPU",
+        (Lang::En, Group::Heatsink) => "Heatsink",
+        (Lang::En, Group::Ssd) => "SSD (proximity)",
+        (Lang::En, Group::Memory) => "Memory",
+        (Lang::En, Group::Battery) => "Battery",
+        (Lang::En, Group::Charger) => "Charger",
+        (Lang::En, Group::Wireless) => "Wireless",
+        (Lang::En, Group::PowerDelivery) => "Power delivery",
+        (Lang::En, Group::System) => "System",
+        (Lang::En, Group::Virtual) => "Derived",
+        (Lang::En, Group::Other) => "Other",
+        (Lang::ZhHans, Group::Cpu) => "CPU",
+        (Lang::ZhHans, Group::CpuDie) => "CPU 芯片",
+        (Lang::ZhHans, Group::Gpu) => "GPU",
+        (Lang::ZhHans, Group::Heatsink) => "散热片",
+        (Lang::ZhHans, Group::Ssd) => "固态（邻近）",
+        (Lang::ZhHans, Group::Memory) => "内存",
+        (Lang::ZhHans, Group::Battery) => "电池",
+        (Lang::ZhHans, Group::Charger) => "充电器",
+        (Lang::ZhHans, Group::Wireless) => "无线",
+        (Lang::ZhHans, Group::PowerDelivery) => "供电",
+        (Lang::ZhHans, Group::System) => "系统",
+        (Lang::ZhHans, Group::Virtual) => "推算值",
+        (Lang::ZhHans, Group::Other) => "其他",
+        (Lang::ZhHant, Group::Cpu) => "CPU",
+        (Lang::ZhHant, Group::CpuDie) => "CPU 晶片",
+        (Lang::ZhHant, Group::Gpu) => "GPU",
+        (Lang::ZhHant, Group::Heatsink) => "散熱片",
+        (Lang::ZhHant, Group::Ssd) => "固態（鄰近）",
+        (Lang::ZhHant, Group::Memory) => "記憶體",
+        (Lang::ZhHant, Group::Battery) => "電池",
+        (Lang::ZhHant, Group::Charger) => "充電器",
+        (Lang::ZhHant, Group::Wireless) => "無線",
+        (Lang::ZhHant, Group::PowerDelivery) => "供電",
+        (Lang::ZhHant, Group::System) => "系統",
+        (Lang::ZhHant, Group::Virtual) => "推算值",
+        (Lang::ZhHant, Group::Other) => "其他",
+        (Lang::Ja, Group::Cpu) => "CPU",
+        (Lang::Ja, Group::CpuDie) => "CPU ダイ",
+        (Lang::Ja, Group::Gpu) => "GPU",
+        (Lang::Ja, Group::Heatsink) => "ヒートシンク",
+        (Lang::Ja, Group::Ssd) => "SSD（近接）",
+        (Lang::Ja, Group::Memory) => "メモリ",
+        (Lang::Ja, Group::Battery) => "バッテリー",
+        (Lang::Ja, Group::Charger) => "充電器",
+        (Lang::Ja, Group::Wireless) => "ワイヤレス",
+        (Lang::Ja, Group::PowerDelivery) => "電源供給",
+        (Lang::Ja, Group::System) => "システム",
+        (Lang::Ja, Group::Virtual) => "推算値",
+        (Lang::Ja, Group::Other) => "その他",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +533,7 @@ mod tests {
                 s.section_menu_bar,
                 s.section_app,
                 s.temperature_label,
+                s.peak_label,
                 s.refresh,
                 s.quit,
                 s.dialog_title,

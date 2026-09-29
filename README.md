@@ -102,6 +102,77 @@ Options: `--no-sudo` (report the permission error instead of escalating),
 A forced fan is **temporary**: rebooting, sleeping or closing the lid returns
 it to system control, and `macfan auto` does it immediately.
 
+### `macfan temps` — temperatures by family
+
+"Temperature" is not one number. A MacBook Pro exposes 126 readable sensors, and
+they measure different places at different scales: a CPU hot spot at 92 °C and a
+battery cell at 36 °C are both true at the same moment, and their average means
+nothing.
+
+```console
+$ macfan temps
+  group              n        max       mean   state
+  CPU               30     92.3 °C     79.4 °C   warm
+  CPU die            2     92.3 °C     89.1 °C   warm  (secondary)
+  GPU                6     67.4 °C     64.3 °C   ok
+  Heatsink          16     68.1 °C     63.5 °C   warm  (secondary)
+  SSD (proximity)   20     66.2 °C     54.0 °C   warm  (secondary)
+  Memory             4     63.7 °C     38.8 °C   warm  (secondary)
+  Battery            3     36.1 °C     35.4 °C   ok
+  Charger            1     56.3 °C     56.3 °C   HOT   (secondary)
+  Wireless           1     41.1 °C     41.1 °C   ok    (secondary)
+
+$ macfan temps gpu        # one family
+$ macfan temps --all      # every sensor, named
+```
+
+`state` compares the family's **hot spot** against that family's own thresholds —
+45 °C is worth flagging on a battery and unremarkable on a CPU rail. Sensors
+reading zero are skipped: they are unwired, and counting them would drag a mean
+down for no reason.
+
+#### Which readings are trustworthy
+
+Each family was loaded on purpose and watched, so a family is only claimed when
+its sensors moved for the right reason (M2 13" MacBook Pro, 2026-09):
+
+| family | keys | measured response |
+|--------|------|-------------------|
+| CPU | `Tp0*`, `Tp1*`, `Te0*` | +24…29 °C under 8 CPU threads |
+| CPU die | `TCMz` (max), `TCMb` (average) | the SMC's own die aggregates, same ramp |
+| GPU | `Tg0*`, `Tg1*` | +11…12 °C under a WebGL shader burn, while the CPU moved +2 |
+| Heatsink | `Th0*` | +7.5 °C under GPU load, slower and smoother than the die |
+| Battery | `TB*T` | 36.4 °C, flat under every load — a real probe that is simply inert |
+| Charger | `TCHP` | rises while charging |
+| Memory | `TMVR`, `TVM*` | memory rail and its regulator, 44…64 °C |
+| Wireless | `TW0*` | +0.7 °C: small but real |
+
+**Not trustworthy: the SSD family.** Keys `Ts0*`, `Tsx*` and `TH0*` are labelled
+SSD/NAND in the community key databases, but 90 s of sustained writes with
+`fsync` moved them by 3.7 °C — exactly what the die sensors moved, i.e. they
+track board heat rather than flash activity. macOS exposes no NVMe temperature
+either (`system_profiler SPNVMeDataType` is empty, the controller in `ioreg` has
+no temperature properties, and `smartctl` cannot talk to Apple's storage). They
+are listed as **SSD (proximity)** and never presented as a disk temperature.
+
+The SMC's derived values (`TVS*`, `TVD*`, `TVA*`, `TAO`) repeat other readings
+rather than measuring a place of their own, so they appear only in
+`macfan temps --all` and are never summarised or alarmed about.
+
+#### What is displayed, and how
+
+- **Hot spot, not mean.** Per-core sensors park and drop out of the readable
+  set, so a mean over a changing sample size jumps; the maximum is stable, and
+  it is also what drives fan ramp and throttling.
+- **Smoothed over a 15 s time constant** (an exponential moving average that
+  uses the real interval between samples). Raw readings move ±3…5 °C between two
+  reads, which is unreadable at a glance; 15 s steadies the number while still
+  showing a workload ramp within about twenty seconds. The peak of the window is
+  shown next to it when it is 3 °C or more above, because a spike that has
+  already passed is what someone watching wants to know.
+- The menu bar app puts the same families in a submenu under its temperature
+  row, each judged against its own thresholds.
+
 ### `rsmc` — raw SMC access
 
 | flag | meaning |

@@ -69,6 +69,24 @@ fn fixed_signed(b: &[u8], scale: f64, precision: usize) -> Decoded {
     }
 }
 
+/// Decode a temperature payload into °C plus a short name for its encoding.
+///
+/// Apple Silicon publishes temperatures as 4-byte little-endian floats; Intel
+/// Macs use 16-bit `sp78` fixed point (1/256 °C steps, signed).
+pub fn temperature(data_type: &str, data_size: u32, bytes: &[u8]) -> Option<(f64, &'static str)> {
+    match (data_type, data_size) {
+        ("flt ", 4) => Some((
+            f64::from(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])),
+            "flt",
+        )),
+        ("sp78", 2) => Some((
+            f64::from(i16::from_be_bytes([bytes[0], bytes[1]])) / 256.0,
+            "sp78",
+        )),
+        _ => None,
+    }
+}
+
 /// Decode a payload according to its data type, or `None` if the type/size
 /// combination isn't a number we know how to print.
 pub fn decode(data_type: &str, data_size: u32, bytes: &[u8]) -> Option<Decoded> {
@@ -143,6 +161,23 @@ pub fn format_line(key: &str, data_type: &str, data_size: u32, bytes: &[u8]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn temperature_decoding_covers_both_encodings() {
+        // flt: little-endian float, what Apple Silicon uses.
+        assert_eq!(
+            temperature("flt ", 4, &35.0f32.to_le_bytes()),
+            Some((35.0, "flt"))
+        );
+        // sp78: signed fixed point, 1/256 °C steps, what Intel Macs use.
+        assert_eq!(temperature("sp78", 2, &[0x1e, 0x80]), Some((30.5, "sp78")));
+        // Negative temperatures keep their sign.
+        let (value, _) = temperature("sp78", 2, &[0xe1, 0x80]).expect("negative");
+        assert!(value < 0.0, "{value}");
+        // Anything else is not a temperature.
+        assert_eq!(temperature("ui16", 2, &[0x00, 0x10]), None);
+        assert_eq!(temperature("flt ", 2, &[0, 0]), None);
+    }
 
     #[test]
     fn renders_like_the_reference_tool() {
