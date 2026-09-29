@@ -1206,7 +1206,9 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
 
     // The temperature row opens a submenu: one line per family, each carrying a
     // reading once refresh has run.
-    let temp_rows: Vec<String> = (0..menu.numberOfItems())
+    // The label is on the item itself, so it is there even with no hardware; the
+    // reading only appears once refresh has run, and only where sensors exist.
+    let temp_rows: Vec<(String, String)> = (0..menu.numberOfItems())
         .filter_map(|index| menu.itemAtIndex(index))
         .find(|item| item.tag() == TAG_TEMP)
         .and_then(|item| item.submenu())
@@ -1214,28 +1216,30 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
             (0..submenu.numberOfItems())
                 .filter_map(|index| submenu.itemAtIndex(index))
                 .map(|row| {
-                    row.attributedTitle()
+                    let value = row
+                        .attributedTitle()
                         .map(|title| title.string().to_string())
-                        .unwrap_or_default()
+                        .unwrap_or_default();
+                    (row.title().to_string(), value)
                 })
                 .collect()
         })
         .unwrap_or_default();
+    let sensors_present = controller
+        .ivars()
+        .watched
+        .borrow()
+        .iter()
+        .any(|watched| !watched.keys.is_empty());
     let families_ok = temp_rows.len() == WATCHED.len()
-        && temp_rows.iter().all(|row| !row.trim().is_empty())
-        && (controller
-            .ivars()
-            .watched
-            .borrow()
-            .iter()
-            .all(|watched| watched.keys.is_empty())
-            || temp_rows.iter().any(|row| row.contains("°C")));
+        && temp_rows.iter().all(|(label, _)| !label.trim().is_empty())
+        && (!sensors_present || temp_rows.iter().any(|(_, value)| value.contains("°C")));
     println!(
         "selftest: temperature families = {} ({families_ok})",
         temp_rows.len()
     );
-    for row in &temp_rows {
-        println!("selftest:   {row}");
+    for (label, value) in &temp_rows {
+        println!("selftest:   {label} {value}");
     }
 
     // A CI runner has no SMC, so the hardware-dependent expectations are
