@@ -250,7 +250,7 @@ const ZH_HANS: Strings = Strings {
     section_menu_bar: "菜单栏",
     section_app: "应用",
     temperature_label: "温度",
-    peak_label: "ピーク",
+    peak_label: "峰值",
     refresh: "刷新",
     quit: "退出",
     dialog_title: "设置风扇转速",
@@ -344,7 +344,7 @@ const JA: Strings = Strings {
     section_menu_bar: "メニューバー",
     section_app: "アプリケーション",
     temperature_label: "温度",
-    peak_label: "峰值",
+    peak_label: "ピーク",
     refresh: "更新",
     quit: "終了",
     dialog_title: "ファン回転数を設定",
@@ -502,6 +502,26 @@ mod tests {
         assert_eq!(Lang::from_tag(""), Lang::En);
     }
 
+    /// Kana cannot appear in English or Chinese text.
+    fn has_kana(text: &str) -> bool {
+        text.chars().any(|c| {
+            ('\u{3041}'..='\u{3096}').contains(&c) || ('\u{30a1}'..='\u{30fa}').contains(&c)
+        })
+    }
+
+    #[test]
+    fn the_peak_label_is_not_borrowed_from_another_language() {
+        // A patch once wrote the Japanese peak label into the Chinese strings and
+        // the Chinese one into Japanese: the anchors it edited were identical in
+        // both languages, so the two got swapped. Kanji look alike across the two
+        // languages, so this exact field is pinned; the kana sweep in
+        // `every_language_has_all_strings_filled_in` covers the general case.
+        assert_eq!(strings(Lang::En).peak_label, "peak");
+        assert_eq!(strings(Lang::ZhHans).peak_label, "峰值");
+        assert_eq!(strings(Lang::ZhHant).peak_label, "峰值");
+        assert_eq!(strings(Lang::Ja).peak_label, "ピーク");
+    }
+
     #[test]
     fn every_language_has_all_strings_filled_in() {
         for lang in Lang::all() {
@@ -552,6 +572,12 @@ mod tests {
                 s.login_error,
             ] {
                 assert!(!value.trim().is_empty(), "{lang:?} has an empty string");
+                if lang != Lang::Ja {
+                    assert!(
+                        !has_kana(value),
+                        "{lang:?} contains kana, which belongs to Japanese only: {value:?}"
+                    );
+                }
             }
             assert!(s.preset(4500).contains("4500"));
             assert!(s.speed_message(1199, 7199).contains("1199"));
