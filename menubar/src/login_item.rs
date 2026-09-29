@@ -65,6 +65,38 @@ pub fn is_enabled() -> bool {
     plist_path().exists()
 }
 
+/// Where the installed agent points, if it is installed and readable.
+pub fn installed_target() -> Option<String> {
+    let text = fs::read_to_string(plist_path()).ok()?;
+    let start = text.find("<key>ProgramArguments</key>")?;
+    let rest = &text[start..];
+    let open = rest.find("<string>")? + "<string>".len();
+    let close = rest[open..].find("</string>")? + open;
+    Some(unescape_xml(&rest[open..close]))
+}
+
+/// Rewrite the agent when it points somewhere else — the app may have been
+/// moved (a build directory to /Applications, for instance), and a login item
+/// aimed at a path that no longer exists fails silently at login.
+///
+/// Returns the new path when a rewrite happened.
+pub fn heal_if_stale() -> Option<PathBuf> {
+    if !is_enabled() {
+        return None;
+    }
+    let current = std::env::current_exe().ok()?.display().to_string();
+    if installed_target().as_deref() == Some(current.as_str()) {
+        return None;
+    }
+    enable().ok()
+}
+
+fn unescape_xml(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 /// Install the agent. Takes effect at the next login.
 pub fn enable() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;

@@ -115,6 +115,8 @@ pub struct Strings {
     pub state_custom: &'static str,
     /// Status when the fans disagree (multi-fan, mixed modes).
     pub state_mixed: &'static str,
+    /// Alert body when a fan command failed, `{err}` is substituted.
+    pub action_failed: &'static str,
     /// Menu item: re-read the fans.
     pub refresh: &'static str,
     /// Menu item: quit.
@@ -165,10 +167,11 @@ const EN: Strings = Strings {
     state_label: "Current",
     state_custom: "Custom {rpm} rpm",
     state_mixed: "Mixed (fans differ)",
+    action_failed: "The command did not run: {err}",
     refresh: "Refresh",
     quit: "Quit",
     dialog_title: "Set fan speed",
-    dialog_message: "Target speed in rpm (this Mac reports {min}–{max} rpm).",
+    dialog_message: "Target speed in rpm (this Mac reports {min}–{max} rpm). Each fan is capped by its own maximum.",
     ok: "Set",
     cancel: "Cancel",
     invalid_number: "Enter a whole number of rpm.",
@@ -199,10 +202,11 @@ const ZH_HANS: Strings = Strings {
     state_label: "当前",
     state_custom: "自定义 {rpm} rpm",
     state_mixed: "混合状态（多个风扇不一致）",
+    action_failed: "命令没有执行成功：{err}",
     refresh: "刷新",
     quit: "退出",
     dialog_title: "设置风扇转速",
-    dialog_message: "目标转速（rpm），本机范围 {min}–{max}。",
+    dialog_message: "目标转速（rpm），本机范围 {min}–{max}。每个风扇按各自上限封顶。",
     ok: "设定",
     cancel: "取消",
     invalid_number: "请输入整数 rpm。",
@@ -233,10 +237,11 @@ const ZH_HANT: Strings = Strings {
     state_label: "目前",
     state_custom: "自訂 {rpm} rpm",
     state_mixed: "混合狀態（多個風扇不一致）",
+    action_failed: "命令沒有執行成功：{err}",
     refresh: "重新整理",
     quit: "結束",
     dialog_title: "設定風扇轉速",
-    dialog_message: "目標轉速（rpm），本機範圍 {min}–{max}。",
+    dialog_message: "目標轉速（rpm），本機範圍 {min}–{max}。每個風扇按各自上限封頂。",
     ok: "設定",
     cancel: "取消",
     invalid_number: "請輸入整數 rpm。",
@@ -267,10 +272,11 @@ const JA: Strings = Strings {
     state_label: "現在",
     state_custom: "カスタム {rpm} rpm",
     state_mixed: "混在（ファンごとに異なる）",
+    action_failed: "コマンドを実行できませんでした：{err}",
     refresh: "更新",
     quit: "終了",
     dialog_title: "ファン回転数を設定",
-    dialog_message: "目標回転数（rpm）。この Mac の範囲は {min}–{max} です。",
+    dialog_message: "目標回転数（rpm）。この Mac の範囲は {min}–{max} です。各ファンはそれぞれの上限で制限されます。",
     ok: "設定",
     cancel: "キャンセル",
     invalid_number: "整数の rpm を入力してください。",
@@ -328,6 +334,11 @@ impl Strings {
             .replace("{max}", &max.to_string())
     }
 
+    /// The failure alert body.
+    pub fn action_failed_message(&self, err: &str) -> String {
+        self.action_failed.replace("{err}", err)
+    }
+
     /// The status line for a custom speed.
     pub fn custom_message(&self, rpm: u32) -> String {
         self.state_custom.replace("{rpm}", &rpm.to_string())
@@ -375,6 +386,7 @@ mod tests {
                 s.state_label,
                 s.state_custom,
                 s.state_mixed,
+                s.action_failed,
                 s.refresh,
                 s.quit,
                 s.dialog_title,

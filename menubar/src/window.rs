@@ -38,6 +38,7 @@ pub struct SettingsWindow {
 pub fn build<T: NSObjectProtocol + 'static>(
     mtm: MainThreadMarker,
     s: &'static Strings,
+    version: &str,
     target: &T,
 ) -> SettingsWindow {
     let window = unsafe {
@@ -60,7 +61,8 @@ pub fn build<T: NSObjectProtocol + 'static>(
     ));
 
     let mut y = HEIGHT - MARGIN - ROW_HEIGHT;
-    let heading = NSTextField::labelWithString(&NSString::from_str("macfan"), mtm);
+    let heading =
+        NSTextField::labelWithString(&NSString::from_str(&format!("macfan {version}")), mtm);
     heading.setFrame(NSRect::new(
         NSPoint::new(MARGIN, y),
         NSSize::new(WIDTH - 2.0 * MARGIN, ROW_HEIGHT),

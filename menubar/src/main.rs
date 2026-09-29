@@ -29,9 +29,10 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy, NSButton,
-    NSControlStateValueOff, NSControlStateValueOn, NSImage, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSTextField, NSVariableStatusItemLength, NSWindow, NSWindowDelegate,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSApplicationActivationPolicy,
+    NSApplicationDelegate, NSButton, NSControlStateValueOff, NSControlStateValueOn, NSImage,
+    NSMenu, NSMenuItem, NSStatusBar, NSStatusItem, NSTextField, NSVariableStatusItemLength,
+    NSWindow, NSWindowDelegate,
 };
 use objc2_foundation::{
     ns_string, MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
@@ -97,6 +98,18 @@ define_class!(
 
     // SAFETY: NSObjectProtocol has no safety requirements.
     unsafe impl NSObjectProtocol for Controller {}
+
+    // SAFETY: NSApplicationDelegate has no safety requirements.
+    unsafe impl NSApplicationDelegate for Controller {
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_handle_reopen(&self, _sender: &NSApplication, _has_visible: bool) -> bool {
+            // Clicking the Dock icon with no window open has to bring the
+            // settings window back: with the menu bar icon switched off, that
+            // is the only way into the app.
+            self.show_window();
+            true
+        }
+    }
 
     // SAFETY: NSWindowDelegate has no safety requirements.
     unsafe impl NSWindowDelegate for Controller {
@@ -348,7 +361,13 @@ impl Controller {
     /// asynchronous, so "the helper exited 0" alone means very little.
     fn apply(&self, action: Action, args: &[&str]) {
         let before = read_fans_or_empty();
-        run_cli(args);
+        if let Err(err) = run_cli(args) {
+            let s = self.strings();
+            let alert = NSAlert::new(self.mtm());
+            alert.setMessageText(&NSString::from_str(&s.action_failed_message(&err)));
+            alert.addButtonWithTitle(&NSString::from_str(s.ok));
+            alert.runModal();
+        }
         self.refresh();
         let after = read_fans_or_empty();
         if !before.is_empty() && !after.is_empty() && !fan::satisfied(action, &before, &after) {
@@ -577,15 +596,22 @@ fn cli_path() -> Option<String> {
 
 /// Run a fan command. Root (or an unattended password) means the CLI can write
 /// directly; otherwise ask macOS for authorisation.
-fn run_cli(args: &[&str]) {
-    let Some(cli) = cli_path() else { return };
+fn run_cli(args: &[&str]) -> Result<(), String> {
+    let Some(cli) = cli_path() else {
+        return Err("the macfan command was not found (bundle or PATH)".to_string());
+    };
+    run_cli_at(&cli, args)
+}
 
+/// Run a fan command through a specific CLI path. Separate from `run_cli` so
+/// the failure path can be exercised without a GUI.
+fn run_cli_at(cli: &str, args: &[&str]) -> Result<(), String> {
     let unattended = std::env::var("SUDO_PASSWORD").is_ok_and(|v| !v.is_empty());
     let root = unsafe { geteuid() == 0 };
     let result = if root || unattended {
-        Command::new(&cli).args(args).output()
+        Command::new(cli).args(args).output()
     } else {
-        let mut command = shell_quote(&cli);
+        let mut command = shell_quote(cli);
         for a in args {
             command.push(' ');
             command.push_str(&shell_quote(a));
@@ -599,11 +625,20 @@ fn run_cli(args: &[&str]) {
             .output()
     };
 
-    if let Ok(out) = result {
-        if !out.status.success() {
-            let msg = String::from_utf8_lossy(&out.stderr);
-            eprintln!("macfan-menubar: action failed: {}", msg.trim());
+    match result {
+        Ok(out) if out.status.success() => Ok(()),
+        // Cancelling the authorisation dialog lands here too, with osascript's
+        // "User canceled." on stderr — say so instead of doing nothing.
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let msg = if stderr.is_empty() {
+                format!("exit status {}", out.status)
+            } else {
+                stderr
+            };
+            Err(msg)
         }
+        Err(err) => Err(format!("could not run {cli}: {err}")),
     }
 }
 
@@ -767,7 +802,40 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     std::env::remove_var("MACFAN_SETTINGS");
     let _ = std::fs::remove_file(&settings_file);
 
+    // A missing CLI must come back as an error, not as silence.
+    let bogus = run_cli_at("/nonexistent/macfan", &["max"]);
+    println!(
+        "selftest: failing command surfaces an error = {}",
+        if bogus.is_err() { "ok" } else { "FAILED" }
+    );
+    let bogus_ok = bogus.is_err();
+
+    // The login item is rewritten when it points at something else.
+    let dir = std::env::temp_dir().join(format!("macfan-heal-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).ok();
+    std::env::set_var("MACFAN_AGENT_DIR", &dir);
+    let stale = dir.join("com.macfan.menubar.plist");
+    std::fs::write(
+        &stale,
+        login_item::plist_contents(std::path::Path::new("/tmp/gone")),
+    )
+    .ok();
+    let healed = login_item::heal_if_stale().is_some()
+        && login_item::installed_target()
+            == std::env::current_exe()
+                .ok()
+                .map(|p| p.display().to_string());
+    println!(
+        "selftest: stale login item self-heals = {}",
+        if healed { "ok" } else { "FAILED" }
+    );
+    std::env::remove_var("MACFAN_AGENT_DIR");
+    let _ = std::fs::remove_dir_all(&dir);
+
     let ok = !title.is_empty()
+        && bogus_ok
+        && healed
         && labels.len() >= 15
         && wired >= 11
         && login_ok
@@ -839,7 +907,13 @@ fn main() {
         unsafe { msg_send![super(this), init] }
     };
 
-    let settings_window = window::build(mtm, s, &*controller);
+    {
+        let delegate: &ProtocolObject<dyn NSApplicationDelegate> =
+            ProtocolObject::from_ref(&*controller);
+        app.setDelegate(Some(delegate));
+    }
+
+    let settings_window = window::build(mtm, s, env!("CARGO_PKG_VERSION"), &*controller);
     {
         let delegate: &ProtocolObject<dyn NSWindowDelegate> =
             ProtocolObject::from_ref(&*controller);
@@ -936,6 +1010,10 @@ fn main() {
 
     status_item.setMenu(Some(&menu));
     *controller.ivars().item.borrow_mut() = Some(status_item);
+
+    if login_item::heal_if_stale().is_some() {
+        eprintln!("macfan-menubar: the login item pointed elsewhere; rewritten for this app");
+    }
 
     controller.apply_settings();
     controller.refresh();
