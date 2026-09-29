@@ -351,6 +351,21 @@ which makes install, upgrade (`brew upgrade --cask macfan`) and removal
 (`brew uninstall --cask --zap macfan`) one command each, and verifies the
 checksum on the way in.
 
+**Keeping the cask current.** Two paths, so it cannot quietly fall behind — which
+it did once: the tap sat at 0.2.0 while releases reached 0.2.5, and every user's
+`brew upgrade` said "already up to date" throughout.
+
+- **A release bumps it.** The release workflow clones the tap with a deploy key
+  (write access to that one repository — no personal token) and runs the same
+  `scripts/update-cask.sh` an operator would: it hashes the DMG that was actually
+  published, renders `scripts/cask-template.rb`, and reads the cask back.
+- **A schedule catches whatever a release missed.** The tap repository runs its
+  own job once a day, which needs no secret at all because a repository's token
+  can write to itself. If it cannot sync, it fails rather than reporting success.
+
+Both were tested by making the cask stale on purpose: the schedule brought 0.2.0
+back to 0.2.6, and the release workflow brought 0.2.1 back to 0.2.6.
+
 It does **not** remove the first-launch approval: measured on Homebrew 7, the
 cask deliberately applies the quarantine attribute to what it downloads (the
 old `--no-quarantine` flag no longer exists), so Gatekeeper still asks once. The
