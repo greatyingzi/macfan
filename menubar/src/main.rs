@@ -1207,12 +1207,12 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     // The temperature row opens a submenu: one line per family, each carrying a
     // reading once refresh has run.
     let temp_rows: Vec<String> = (0..menu.numberOfItems())
-        .filter_map(|index| menu.itemAtIndex(index as isize))
+        .filter_map(|index| menu.itemAtIndex(index))
         .find(|item| item.tag() == TAG_TEMP)
         .and_then(|item| item.submenu())
         .map(|submenu| {
             (0..submenu.numberOfItems())
-                .filter_map(|index| submenu.itemAtIndex(index as isize))
+                .filter_map(|index| submenu.itemAtIndex(index))
                 .map(|row| {
                     row.attributedTitle()
                         .map(|title| title.string().to_string())
