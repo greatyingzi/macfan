@@ -16,13 +16,14 @@ use objc2_app_kit::{
 use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 
 use crate::i18n::{Lang, Strings};
-use crate::settings::{TitleStyle, DEFAULT_PRESETS};
+use crate::settings::{TitleContent, DEFAULT_PRESETS};
 use crate::{
     TAG_SET_DOCK_ICON, TAG_SET_LAUNCH_LOGIN, TAG_SET_START_MINIMIZED, TAG_SET_STATUS_ITEM,
+    TAG_SET_TITLE_ICON,
 };
 
 const WIDTH: f64 = 480.0;
-const HEIGHT: f64 = 530.0;
+const HEIGHT: f64 = 560.0; // one more row than the three-style layout had
 const MARGIN: f64 = 22.0;
 const ROW_HEIGHT: f64 = 24.0;
 const ROW_GAP: f64 = 6.0;
@@ -34,12 +35,12 @@ const LABEL_WIDTH: f64 = 96.0;
 pub struct SettingsWindow {
     /// The window itself.
     pub window: Retained<NSWindow>,
-    /// The four checkboxes, in display order.
+    /// The five checkboxes, in display order.
     pub checks: Vec<Retained<NSButton>>,
     /// The three preset speed fields.
     pub preset_fields: Vec<Retained<NSTextField>>,
-    /// Menu bar title styles: system first entry is the first style.
-    pub style_popup: Retained<NSPopUpButton>,
+    /// What the title reports: entries follow `TitleContent::all()`.
+    pub content_popup: Retained<NSPopUpButton>,
     /// Language picker: system first, then `Lang::all()`.
     pub language_popup: Retained<NSPopUpButton>,
     /// Live line under the heading: what the fans are doing right now.
@@ -147,21 +148,27 @@ pub fn build<T: NSObjectProtocol + 'static>(
     y -= SECTION_GAP;
     header(s.section_menu_bar, y);
     y -= ROW_HEIGHT + ROW_GAP;
-    let mut checks = Vec::with_capacity(4);
+    let mut checks = Vec::with_capacity(5);
     checks.push(checkbox(s.show_status_item, TAG_SET_STATUS_ITEM, y));
 
+    // Two independent choices, not one list that mixes them: what the number
+    // is, and whether a glyph sits beside it.
     y -= ROW_HEIGHT + ROW_GAP;
-    let style_label = NSTextField::labelWithString(&NSString::from_str(s.title_style_label), mtm);
-    style_label.setFrame(NSRect::new(
+    let content_label =
+        NSTextField::labelWithString(&NSString::from_str(s.title_content_label), mtm);
+    content_label.setFrame(NSRect::new(
         NSPoint::new(MARGIN, y),
         NSSize::new(LABEL_WIDTH, ROW_HEIGHT),
     ));
-    blur.addSubview(&style_label);
-    let style_popup = popup(&[s.style_icon_rpm, s.style_rpm_only, s.style_icon_temp], y);
+    blur.addSubview(&content_label);
+    let content_popup = popup(&[s.content_speed, s.content_temp], y);
     unsafe {
-        style_popup.setTarget(Some(target.as_any_object()));
-        style_popup.setAction(Some(sel!(titleStyleChanged:)));
+        content_popup.setTarget(Some(target.as_any_object()));
+        content_popup.setAction(Some(sel!(titleContentChanged:)));
     }
+
+    y -= ROW_HEIGHT + ROW_GAP;
+    checks.push(checkbox(s.title_icon_label, TAG_SET_TITLE_ICON, y));
 
     // --- application ------------------------------------------------------
     y -= ROW_HEIGHT + SECTION_GAP;
@@ -244,7 +251,7 @@ pub fn build<T: NSObjectProtocol + 'static>(
         window,
         checks,
         preset_fields,
-        style_popup,
+        content_popup,
         language_popup,
         subtitle,
     }
@@ -270,11 +277,11 @@ pub fn language_tag(index: usize) -> Option<Option<&'static str>> {
     }
 }
 
-/// Index of the popup entry for a title style.
-pub fn style_index(style: TitleStyle) -> usize {
-    TitleStyle::all()
+/// Index of the popup entry for a title content.
+pub fn content_index(content: TitleContent) -> usize {
+    TitleContent::all()
         .iter()
-        .position(|candidate| *candidate == style)
+        .position(|candidate| *candidate == content)
         .unwrap_or(0)
 }
 

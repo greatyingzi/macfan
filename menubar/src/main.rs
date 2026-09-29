@@ -45,10 +45,13 @@ use macfan::fan::{self, Action};
 use macfan::smc::Smc;
 
 use i18n::{Lang, Strings};
-use settings::{Settings, TitleStyle, DEFAULT_PRESETS};
+use settings::{Settings, TitleContent, DEFAULT_PRESETS};
 use style::Slot;
 
 const REFRESH_SECONDS: f64 = 2.0;
+/// Shown in the title when the selected reading is unavailable.
+const TITLE_NO_READING: &str = "—";
+
 /// Time constant of the temperature moving average, in seconds. Long enough to
 /// steady a flickering reading, short enough to notice a workload starting.
 const TEMP_REFRESH_SECONDS: f64 = 15.0;
@@ -77,6 +80,7 @@ const TAG_SET_STATUS_ITEM: isize = 20;
 const TAG_SET_DOCK_ICON: isize = 21;
 const TAG_SET_LAUNCH_LOGIN: isize = 22;
 const TAG_SET_START_MINIMIZED: isize = 23;
+const TAG_SET_TITLE_ICON: isize = 24;
 
 /// A sensor family shown in the menu: its keys (discovered once, they do not
 /// change while the machine is up), its own smoothing, and its menu row.
@@ -111,7 +115,6 @@ struct Ivars {
     window: RefCell<Option<Retained<NSWindow>>>,
     checks: RefCell<Vec<Retained<NSButton>>>,
     /// True when the status item carries a glyph, so the title can stay short.
-    compact_title: RefCell<bool>,
     /// Action items that take a tick when they match the current state.
     actions: RefCell<Vec<(isize, Retained<NSMenuItem>)>>,
     /// Item that shows a custom speed, hidden unless one is in force.
@@ -123,7 +126,7 @@ struct Ivars {
     /// The three preset fields in the settings window.
     preset_fields: RefCell<Vec<Retained<NSTextField>>>,
     /// The menu bar title popup.
-    style_popup: RefCell<Option<Retained<NSPopUpButton>>>,
+    content_popup: RefCell<Option<Retained<NSPopUpButton>>>,
     /// The language picker.
     language_popup: RefCell<Option<Retained<NSPopUpButton>>>,
     /// Live state line in the settings window.
@@ -199,6 +202,7 @@ define_class!(
                 let mut settings = self.ivars().settings.borrow_mut();
                 match tag {
                     TAG_SET_STATUS_ITEM => settings.show_status_item = on,
+                    TAG_SET_TITLE_ICON => settings.title_icon = on,
                     TAG_SET_DOCK_ICON => settings.show_dock_icon = on,
                     TAG_SET_LAUNCH_LOGIN => {
                         // Derived from the plist, not stored: this one is not a
@@ -249,12 +253,15 @@ define_class!(
             }
         }
 
-        #[unsafe(method(titleStyleChanged:))]
-        fn title_style_changed(&self, sender: Option<&NSPopUpButton>) {
+        #[unsafe(method(titleContentChanged:))]
+        fn title_content_changed(&self, sender: Option<&NSPopUpButton>) {
             let Some(sender) = sender else { return };
-            let styles = TitleStyle::all();
-            if let Some(style) = styles.get(sender.indexOfSelectedItem().max(0) as usize) {
-                self.ivars().settings.borrow_mut().title_style = *style;
+            let contents = TitleContent::all();
+            if let Some(content) = contents.get(sender.indexOfSelectedItem().max(0) as usize) {
+                self.ivars().settings.borrow_mut().title_content = *content;
+                // The glyph names the content (fan for speed, thermometer for
+                // °C), so it changes with it.
+                *self.ivars().symbol.borrow_mut() = status_item_image(*content);
                 self.apply_settings();
                 self.refresh();
             }
@@ -346,9 +353,10 @@ impl Controller {
         if let Some(item) = self.ivars().item.borrow().as_ref() {
             if let Some(button) = item.button(self.mtm()) {
                 button.setTitle(&NSString::from_str(&text));
-                let glyph = match settings.title_style {
-                    TitleStyle::RpmOnly => None,
-                    _ => self.ivars().symbol.borrow().clone(),
+                let glyph = if settings.title_icon {
+                    self.ivars().symbol.borrow().clone()
+                } else {
+                    None
                 };
                 button.setImage(glyph.as_deref());
             }
@@ -393,8 +401,8 @@ impl Controller {
         {
             field.setStringValue(&NSString::from_str(&rpm.to_string()));
         }
-        if let Some(popup) = self.ivars().style_popup.borrow().as_ref() {
-            popup.selectItemAtIndex(window::style_index(settings.title_style) as isize);
+        if let Some(popup) = self.ivars().content_popup.borrow().as_ref() {
+            popup.selectItemAtIndex(window::content_index(settings.title_content) as isize);
         }
         if let Some(popup) = self.ivars().language_popup.borrow().as_ref() {
             let index = match settings.language.as_deref() {
@@ -455,6 +463,7 @@ impl Controller {
         for check in self.ivars().checks.borrow().iter() {
             let on = match check.tag() {
                 TAG_SET_STATUS_ITEM => settings.show_status_item,
+                TAG_SET_TITLE_ICON => settings.title_icon,
                 TAG_SET_DOCK_ICON => settings.show_dock_icon,
                 TAG_SET_LAUNCH_LOGIN => login_item::is_enabled(),
                 TAG_SET_START_MINIMIZED => settings.start_minimized,
@@ -662,8 +671,12 @@ impl Controller {
 /// Status item glyph: an SF Symbol, as a template image so it follows the menu
 /// bar's light/dark appearance. Falls back to nothing on systems whose symbol
 /// set predates `fanblades` (macOS 12).
-fn status_item_image() -> Option<Retained<NSImage>> {
-    for name in ["fanblades", "fanblades.fill", "wind"] {
+fn status_item_image(content: TitleContent) -> Option<Retained<NSImage>> {
+    let names: &[&str] = match content {
+        TitleContent::Speed => &["fanblades", "fanblades.fill", "wind"],
+        TitleContent::Temp => &["thermometer.medium", "thermometer"],
+    };
+    for name in names {
         let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str(name),
             None,
@@ -731,44 +744,29 @@ fn status_line(
     settings: &Settings,
     cpu_temp: Option<(f64, f64)>,
 ) -> Result<String, macfan::smc::Error> {
-    let smc = Smc::open()?;
-    if settings.title_style == TitleStyle::IconTemp {
-        return Ok(match cpu_temp {
+    match settings.title_content {
+        // The degree sign stays: it is the only thing telling a temperature
+        // apart from a fan speed. A speed needs no unit, and no marker for the
+        // mode either — the menu says which mode is active, in words.
+        TitleContent::Temp => Ok(match cpu_temp {
             Some((smoothed, _)) => format!("{smoothed:.0}°C"),
-            None => s.no_fans.to_string(),
-        });
-    }
-    let fans = fan::read_fans(&smc)?;
-    if fans.is_empty() {
-        return Ok(s.no_fans.to_string());
-    }
-    let speeds: Vec<String> = fans.iter().map(|f| format!("{:.0}", f.current)).collect();
-    let forced = fans.iter().any(|f| f.forced);
-    let suffix = match settings.title_style {
-        TitleStyle::RpmOnly => " rpm",
-        _ => "",
-    };
-    Ok(format!(
-        "{}{}{suffix}",
-        speeds.join("/"),
-        if forced { " ⚡" } else { "" }
-    ))
-}
-
-/// Human-readable name of a mode, shared by the menu's state line and the
-/// settings window's summary.
-fn mode_text(s: &Strings, mode: Mode) -> String {
-    match mode {
-        Mode::Auto => s.automatic.to_string(),
-        Mode::Max => s.force_max.to_string(),
-        Mode::Min => s.force_min.to_string(),
-        Mode::Preset(rpm) => s.preset(rpm),
-        Mode::Custom(rpm) => s.custom_message(rpm),
-        Mode::Mixed => s.state_mixed.to_string(),
+            None => TITLE_NO_READING.to_string(),
+        }),
+        TitleContent::Speed => {
+            let smc = Smc::open()?;
+            let fans = fan::read_fans(&smc)?;
+            if fans.is_empty() {
+                return Ok(s.no_fans.to_string());
+            }
+            Ok(fans
+                .iter()
+                .map(|fan| format!("{:.0}", fan.current))
+                .collect::<Vec<_>>()
+                .join("/"))
+        }
     }
 }
 
-/// One-line summary for the settings window: mode and the current speeds.
 /// The temperature row: smoothed CPU value, with the peak when it is meaningfully
 /// higher (a spike that has passed still matters).
 fn temperature_title(s: &Strings, cpu: Option<(f64, f64)>) -> Retained<NSMutableAttributedString> {
@@ -791,6 +789,20 @@ fn temperature_title(s: &Strings, cpu: Option<(f64, f64)>) -> Retained<NSMutable
     style::attributed(&pieces)
 }
 
+/// Human-readable name of a mode, shared by the menu's state line and the
+/// settings window's summary.
+fn mode_text(s: &Strings, mode: Mode) -> String {
+    match mode {
+        Mode::Auto => s.automatic.to_string(),
+        Mode::Max => s.force_max.to_string(),
+        Mode::Min => s.force_min.to_string(),
+        Mode::Preset(rpm) => s.preset(rpm),
+        Mode::Custom(rpm) => s.custom_message(rpm),
+        Mode::Mixed => s.state_mixed.to_string(),
+    }
+}
+
+/// One-line summary for the settings window: mode and the current speeds.
 fn status_title(s: &Strings, settings: &Settings) -> Retained<NSMutableAttributedString> {
     let fans = read_fans_or_empty();
     if fans.is_empty() {
@@ -992,9 +1004,17 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     println!("selftest: language = {lang:?} ({})", lang.code());
     let supported: Vec<&str> = Lang::all().iter().map(|l| l.code()).collect();
     println!("selftest: supported languages = {supported:?}");
+    let title_has_glyph = controller
+        .ivars()
+        .item
+        .borrow()
+        .as_ref()
+        .and_then(|item| item.button(controller.mtm()))
+        .map(|button| button.image().is_some())
+        .unwrap_or(false);
     println!(
         "selftest: status item glyph = {}, title = {title:?}",
-        if *controller.ivars().compact_title.borrow() {
+        if title_has_glyph {
             "SF Symbol"
         } else {
             "none (text only)"
@@ -1056,11 +1076,19 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     let parse_ok = passed == cases.len();
     println!("selftest: parse_rpm = {passed}/{} cases", cases.len());
 
-    // Settings window: four checkboxes, wired to the four settings.
+    // Settings window: five checkboxes and the content popup, all wired.
     let checks = controller.ivars().checks.borrow();
     let check_titles: Vec<String> = checks.iter().map(|c| c.title().to_string()).collect();
+    let content_entries = controller
+        .ivars()
+        .content_popup
+        .borrow()
+        .as_ref()
+        .map(|popup| (0..popup.numberOfItems()).count())
+        .unwrap_or(0);
     let settings_window_ok = controller.ivars().window.borrow().is_some()
-        && checks.len() == 4
+        && checks.len() == 5
+        && content_entries == TitleContent::all().len()
         && checks
             .iter()
             .all(|c| c.target().is_some() && c.action().is_some());
@@ -1249,38 +1277,47 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         .ok()
         .and_then(|smc| fan::sampled_max_temp(&smc))
         .is_some();
+    // Both axes, all four combinations: the text follows the content, and the
+    // glyph follows the icon setting. A speed carries no unit and no mode
+    // marker; a temperature keeps its degree sign.
     let mut style_ok = true;
-    for style in TitleStyle::all() {
-        controller.ivars().settings.borrow_mut().title_style = style;
-        controller.refresh();
-        let shown = controller
-            .ivars()
-            .item
-            .borrow()
-            .as_ref()
-            .and_then(|item| item.button(controller.mtm()))
-            .map(|button| (button.title().to_string(), button.image().is_some()))
-            .unwrap_or_default();
-        let good = match style {
-            TitleStyle::RpmOnly => !shown.1 && (!hardware || shown.0.contains("rpm")),
-            TitleStyle::IconRpm => shown.1 && (!hardware || !shown.0.contains("rpm")),
-            TitleStyle::IconTemp => {
-                shown.1
-                    && if has_temp {
-                        shown.0.contains("°C")
-                    } else {
-                        true
-                    }
+    for content in TitleContent::all() {
+        for icon in [true, false] {
+            {
+                let mut settings = controller.ivars().settings.borrow_mut();
+                settings.title_content = content;
+                settings.title_icon = icon;
             }
-        };
-        println!(
-            "selftest: title style {:?} -> {:?} (glyph={}) {}",
-            style,
-            shown.0,
-            shown.1,
-            if good { "ok" } else { "FAILED" }
-        );
-        style_ok &= good;
+            controller.refresh();
+            let shown = controller
+                .ivars()
+                .item
+                .borrow()
+                .as_ref()
+                .and_then(|item| item.button(controller.mtm()))
+                .map(|button| (button.title().to_string(), button.image().is_some()))
+                .unwrap_or_default();
+            let glyph_expected = icon && controller.ivars().symbol.borrow().is_some();
+            let text_ok = match content {
+                TitleContent::Speed => {
+                    let readable =
+                        !hardware || shown.0.chars().all(|c| c.is_ascii_digit() || c == '/');
+                    readable
+                        && !shown.0.contains("rpm")
+                        && !shown.0.contains('⚡')
+                        && !shown.0.contains('°')
+                }
+                TitleContent::Temp => !has_temp || shown.0.contains('°'),
+            };
+            let good = shown.1 == glyph_expected && text_ok;
+            println!(
+                "selftest: title {content:?} icon={icon} -> {:?} (glyph={}) {}",
+                shown.0,
+                shown.1,
+                if good { "ok" } else { "FAILED" }
+            );
+            style_ok &= good;
+        }
     }
     // The empty status item case: on a machine with no fan, IconTemp falls back
     // to a message rather than an empty title.
@@ -1359,6 +1396,8 @@ fn main() {
     let lang = Lang::detect();
     let s = i18n::strings(lang);
     let settings = Settings::load();
+    // Read before `settings` moves into the controller.
+    let title_content = settings.title_content;
     let start_minimized = settings.start_minimized || args.iter().any(|a| a == "--minimized");
 
     let controller: Retained<Controller> = {
@@ -1386,13 +1425,13 @@ fn main() {
     *controller.ivars().window.borrow_mut() = Some(settings_window.window);
     *controller.ivars().checks.borrow_mut() = settings_window.checks;
     *controller.ivars().preset_fields.borrow_mut() = settings_window.preset_fields;
-    *controller.ivars().style_popup.borrow_mut() = Some(settings_window.style_popup);
+    *controller.ivars().content_popup.borrow_mut() = Some(settings_window.content_popup);
     *controller.ivars().language_popup.borrow_mut() = Some(settings_window.language_popup);
     *controller.ivars().subtitle.borrow_mut() = Some(settings_window.subtitle);
 
     let status_bar = NSStatusBar::systemStatusBar();
     let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
-    let symbol = status_item_image();
+    let symbol = status_item_image(title_content);
     *controller.ivars().symbol.borrow_mut() = symbol.clone();
     if let Some(button) = status_item.button(mtm) {
         button.setTitle(ns_string!("macfan"));
@@ -1400,7 +1439,6 @@ fn main() {
             button.setImage(Some(image));
         }
     }
-    *controller.ivars().compact_title.borrow_mut() = symbol.is_some();
 
     let menu = NSMenu::new(mtm);
 

@@ -10,44 +10,53 @@
 use std::fs;
 use std::path::PathBuf;
 
-/// What the menu bar title shows.
+/// What the menu bar title reports.
+///
+/// One dimension only: what the number is. Whether a glyph sits next to it is a
+/// separate setting ([`Settings::title_icon`]) — an earlier version folded both
+/// into one list of three "title styles", which made the window's controls read
+/// as two near-duplicates and put a mode marker (a lightning bolt) into the
+/// title where it did not belong.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum TitleStyle {
-    /// Glyph plus the current speed (default).
+pub enum TitleContent {
+    /// Fan speed in RPM, bare. No unit: the number is not ambiguous next to a
+    /// temperature, which always carries its degree sign.
     #[default]
-    IconRpm,
-    /// Speed only, as text.
-    RpmOnly,
-    /// Glyph plus the highest sampled core temperature.
-    IconTemp,
+    Speed,
+    /// The CPU hot spot, in °C.
+    Temp,
 }
 
-impl TitleStyle {
+impl TitleContent {
     /// Name used in the settings file.
     pub fn key(self) -> &'static str {
         match self {
-            TitleStyle::IconRpm => "icon_rpm",
-            TitleStyle::RpmOnly => "rpm_only",
-            TitleStyle::IconTemp => "icon_temp",
+            TitleContent::Speed => "speed",
+            TitleContent::Temp => "temp",
         }
     }
 
     /// Parse a settings-file value, falling back to the default.
-    pub fn parse(value: &str) -> TitleStyle {
+    pub fn parse(value: &str) -> TitleContent {
         match value.trim() {
-            "rpm_only" => TitleStyle::RpmOnly,
-            "icon_temp" => TitleStyle::IconTemp,
-            _ => TitleStyle::IconRpm,
+            "temp" => TitleContent::Temp,
+            _ => TitleContent::Speed,
         }
     }
 
-    /// All styles, in menu order.
-    pub fn all() -> [TitleStyle; 3] {
-        [
-            TitleStyle::IconRpm,
-            TitleStyle::RpmOnly,
-            TitleStyle::IconTemp,
-        ]
+    /// Map the values an older version wrote as `title_style`.
+    pub fn from_legacy_title_style(value: &str) -> (TitleContent, bool) {
+        match value.trim() {
+            "rpm_only" => (TitleContent::Speed, false),
+            "icon_temp" => (TitleContent::Temp, true),
+            // "icon_rpm" and anything unrecognised behaved like the default.
+            _ => (TitleContent::Speed, true),
+        }
+    }
+
+    /// All contents, in menu order.
+    pub fn all() -> [TitleContent; 2] {
+        [TitleContent::Speed, TitleContent::Temp]
     }
 }
 
@@ -69,8 +78,10 @@ pub struct Settings {
     pub start_minimized: bool,
     /// The three speeds offered in the menu.
     pub presets: [u32; 3],
-    /// What the menu bar title shows.
-    pub title_style: TitleStyle,
+    /// What the menu bar title reports.
+    pub title_content: TitleContent,
+    /// Whether the title carries a glyph (fan for speed, thermometer for °C).
+    pub title_icon: bool,
     /// Language tag override; `None` follows the system.
     pub language: Option<String>,
 }
@@ -82,7 +93,8 @@ impl Default for Settings {
             show_dock_icon: true,
             start_minimized: false,
             presets: DEFAULT_PRESETS,
-            title_style: TitleStyle::default(),
+            title_content: TitleContent::default(),
+            title_icon: true,
             language: None,
         }
     }
@@ -119,8 +131,14 @@ impl Settings {
     }
 
     /// Parse `key = value` lines; unknown keys and junk lines are ignored.
+    ///
+    /// The old `title_style` key is still understood, and the new keys win over
+    /// it whatever order they appear in.
     pub fn parse(text: &str) -> Settings {
         let mut settings = Settings::default();
+        let mut legacy_style: Option<String> = None;
+        let mut content: Option<TitleContent> = None;
+        let mut icon: Option<bool> = None;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -136,7 +154,9 @@ impl Settings {
                 "show_status_item" => settings.show_status_item = value,
                 "show_dock_icon" => settings.show_dock_icon = value,
                 "start_minimized" => settings.start_minimized = value,
-                "title_style" => settings.title_style = TitleStyle::parse(raw_value),
+                "title_content" => content = Some(TitleContent::parse(raw_value)),
+                "title_icon" => icon = Some(value),
+                "title_style" => legacy_style = Some(raw_value.trim().to_string()),
                 "language" => {
                     settings.language = match raw_value.trim() {
                         "system" | "" => None,
@@ -155,6 +175,17 @@ impl Settings {
                 _ => {}
             }
         }
+        if let Some(raw) = legacy_style {
+            let (legacy_content, legacy_icon) = TitleContent::from_legacy_title_style(&raw);
+            content = content.or(Some(legacy_content));
+            icon = icon.or(Some(legacy_icon));
+        }
+        if let Some(content) = content {
+            settings.title_content = content;
+        }
+        if let Some(icon) = icon {
+            settings.title_icon = icon;
+        }
         settings
     }
 
@@ -162,14 +193,15 @@ impl Settings {
     pub fn render(&self) -> String {
         format!(
             "# macfan settings\nshow_status_item = {}\nshow_dock_icon = {}\nstart_minimized = {}\n\
-             preset1 = {}\npreset2 = {}\npreset3 = {}\ntitle_style = {}\nlanguage = {}\n",
+             preset1 = {}\npreset2 = {}\npreset3 = {}\ntitle_content = {}\ntitle_icon = {}\nlanguage = {}\n",
             self.show_status_item,
             self.show_dock_icon,
             self.start_minimized,
             self.presets[0],
             self.presets[1],
             self.presets[2],
-            self.title_style.key(),
+            self.title_content.key(),
+            self.title_icon,
             self.language.as_deref().unwrap_or("system"),
         )
     }
@@ -260,7 +292,8 @@ mod tests {
 
         let wanted = Settings {
             presets: [2500, 5000, 7000],
-            title_style: TitleStyle::IconTemp,
+            title_content: TitleContent::Temp,
+            title_icon: false,
             language: Some("ja".to_string()),
             ..Settings::default()
         };
@@ -268,8 +301,29 @@ mod tests {
         assert_eq!(Settings::load(), wanted);
 
         // Unknown style falls back to the default; "system" clears the override.
+        // The three "title styles" of 0.2.x map onto the two axes that replaced
+        // them, and the new keys win over the old one in either order.
+        for (legacy, content, icon) in [
+            ("rpm_only", TitleContent::Speed, false),
+            ("icon_rpm", TitleContent::Speed, true),
+            ("icon_temp", TitleContent::Temp, true),
+        ] {
+            let old = Settings::parse(&format!("title_style = {legacy}\n"));
+            assert_eq!(old.title_content, content, "{legacy}");
+            assert_eq!(old.title_icon, icon, "{legacy}");
+        }
+        let mixed =
+            Settings::parse("title_style = rpm_only\ntitle_content = temp\ntitle_icon = true\n");
+        assert_eq!(mixed.title_content, TitleContent::Temp);
+        assert!(mixed.title_icon);
+        let mixed =
+            Settings::parse("title_content = temp\ntitle_icon = false\ntitle_style = icon_rpm\n");
+        assert_eq!(mixed.title_content, TitleContent::Temp);
+        assert!(!mixed.title_icon);
+
         let parsed = Settings::parse("title_style = nonsense\nlanguage = system\npreset1 = 3300\n");
-        assert_eq!(parsed.title_style, TitleStyle::IconRpm);
+        assert_eq!(parsed.title_content, TitleContent::Speed);
+        assert!(parsed.title_icon);
         assert_eq!(parsed.language, None);
         assert_eq!(parsed.presets[0], 3300);
         assert_eq!(parsed.presets[1], DEFAULT_PRESETS[1]);

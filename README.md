@@ -173,6 +173,24 @@ rather than measuring a place of their own, so they appear only in
 - The menu bar app puts the same families in a submenu under its temperature
   row, each judged against its own thresholds.
 
+### Menu bar title
+
+Two settings, one dimension each:
+
+| setting | values | what it does |
+|---------|--------|--------------|
+| Show | `Speed` / `Temperature` | what the number is |
+| Icon in the title | on / off | whether a glyph sits beside it |
+
+A speed is bare — `7219`, or `7219/2400` on a two-fan Mac. A temperature keeps
+its degree sign (`79°C`), which is what tells the two apart. The glyph names the
+reading (a fan for speed, a thermometer for °C) and never carries state: the menu
+says which mode is active, in words, on its first line.
+
+Settings files written by 0.2.2 and earlier are migrated on read:
+`title_style = rpm_only` becomes speed without an icon, `icon_rpm` becomes speed
+with one, `icon_temp` becomes temperature with one.
+
 ### `rsmc` — raw SMC access
 
 | flag | meaning |
