@@ -60,6 +60,51 @@ impl TitleContent {
     }
 }
 
+/// The fan setting that was in force last time, remembered so a launch can put
+/// it back.
+///
+/// Sleep, reboot and closing the lid all hand the fans back to system control,
+/// so without this a forced speed lasts only until the machine catches its
+/// breath. The remembered value is "the last setting that was applied", not
+/// "whatever the SMC reports at launch" — at launch that is always automatic,
+/// which would erase the very thing being remembered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LastState {
+    /// System control.
+    Auto,
+    /// Forced to the fans' maximum.
+    Max,
+    /// Forced to the fans' minimum.
+    Min,
+    /// Forced to a preset speed.
+    Preset(u32),
+}
+
+impl LastState {
+    /// Representation for the settings file.
+    pub fn render(self) -> String {
+        match self {
+            LastState::Auto => "auto".to_string(),
+            LastState::Max => "max".to_string(),
+            LastState::Min => "min".to_string(),
+            LastState::Preset(rpm) => format!("preset:{rpm}"),
+        }
+    }
+
+    /// Parse a settings-file value; `None` for anything unrecognised.
+    pub fn parse(value: &str) -> Option<LastState> {
+        match value.trim() {
+            "auto" => Some(LastState::Auto),
+            "max" => Some(LastState::Max),
+            "min" => Some(LastState::Min),
+            other => other
+                .strip_prefix("preset:")
+                .and_then(|rpm| rpm.trim().parse::<u32>().ok())
+                .map(LastState::Preset),
+        }
+    }
+}
+
 /// The speeds offered as menu presets when the settings have not been changed.
 pub const DEFAULT_PRESETS: [u32; 3] = [3000, 4500, 6000];
 
@@ -82,6 +127,12 @@ pub struct Settings {
     pub title_content: TitleContent,
     /// Whether the title carries a glyph (fan for speed, thermometer for °C).
     pub title_icon: bool,
+    /// Put the last fan setting back when the app starts. Off by default: it
+    /// writes to the SMC, which can ask for authorisation, and that is a choice
+    /// a person should make rather than find.
+    pub restore_last: bool,
+    /// The last setting that was applied, if any.
+    pub last_state: Option<LastState>,
     /// Language tag override; `None` follows the system.
     pub language: Option<String>,
 }
@@ -95,6 +146,8 @@ impl Default for Settings {
             presets: DEFAULT_PRESETS,
             title_content: TitleContent::default(),
             title_icon: true,
+            restore_last: false,
+            last_state: None,
             language: None,
         }
     }
@@ -156,6 +209,8 @@ impl Settings {
                 "start_minimized" => settings.start_minimized = value,
                 "title_content" => content = Some(TitleContent::parse(raw_value)),
                 "title_icon" => icon = Some(value),
+                "restore_last" => settings.restore_last = value,
+                "last_state" => settings.last_state = LastState::parse(raw_value),
                 "title_style" => legacy_style = Some(raw_value.trim().to_string()),
                 "language" => {
                     settings.language = match raw_value.trim() {
@@ -193,7 +248,8 @@ impl Settings {
     pub fn render(&self) -> String {
         format!(
             "# macfan settings\nshow_status_item = {}\nshow_dock_icon = {}\nstart_minimized = {}\n\
-             preset1 = {}\npreset2 = {}\npreset3 = {}\ntitle_content = {}\ntitle_icon = {}\nlanguage = {}\n",
+             preset1 = {}\npreset2 = {}\npreset3 = {}\ntitle_content = {}\ntitle_icon = {}\n\
+             restore_last = {}\nlast_state = {}\nlanguage = {}\n",
             self.show_status_item,
             self.show_dock_icon,
             self.start_minimized,
@@ -202,8 +258,19 @@ impl Settings {
             self.presets[2],
             self.title_content.key(),
             self.title_icon,
+            self.restore_last,
+            self.last_state.map(LastState::render).unwrap_or_default(),
             self.language.as_deref().unwrap_or("system"),
         )
+    }
+
+    /// The setting to put back at launch, if the user asked for that.
+    pub fn startup_state(&self) -> Option<LastState> {
+        if self.restore_last {
+            self.last_state
+        } else {
+            None
+        }
     }
 
     /// Hiding both the menu bar icon and the Dock icon would leave no way back
@@ -301,6 +368,31 @@ mod tests {
         assert_eq!(Settings::load(), wanted);
 
         // Unknown style falls back to the default; "system" clears the override.
+        // The remembered setting round-trips, and junk is not remembered.
+        let remembered = Settings {
+            last_state: Some(LastState::Preset(4321)),
+            restore_last: true,
+            ..Settings::default()
+        };
+        let back = Settings::parse(&remembered.render());
+        assert_eq!(back.last_state, Some(LastState::Preset(4321)));
+        assert!(back.restore_last);
+        assert_eq!(LastState::parse("nonsense"), None);
+        assert_eq!(LastState::parse("preset:abc"), None);
+        assert_eq!(
+            LastState::parse("preset:4500"),
+            Some(LastState::Preset(4500))
+        );
+        // Restoring is opt-in: the default is off, and off means nothing happens
+        // however much was remembered.
+        assert_eq!(Settings::default().startup_state(), None);
+        let opted_out = Settings {
+            restore_last: false,
+            ..remembered.clone()
+        };
+        assert_eq!(opted_out.startup_state(), None);
+        assert_eq!(remembered.startup_state(), Some(LastState::Preset(4321)));
+
         // The three "title styles" of 0.2.x map onto the two axes that replaced
         // them, and the new keys win over the old one in either order.
         for (legacy, content, icon) in [

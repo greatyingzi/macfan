@@ -283,6 +283,30 @@ every language. A screenshot is not available to an agent shell (no
 screen-recording permission), and "it started without crashing" would not have
 proven the wiring.
 
+### Startup
+
+By default the app starts without touching the fans: writing to the SMC needs
+root, which means an authorisation prompt, and that is not something to spring on
+someone at login.
+
+**Restore the last speed at launch** (off by default) remembers the setting that
+was last applied and puts it back when the app starts. It matters because sleep,
+reboot and closing the lid all hand the fans back to system control, so a forced
+speed otherwise lasts only until the machine catches its breath.
+
+Two details worth knowing:
+
+- It remembers the last setting that was *applied by this app*, not what the SMC
+  reports at launch. At launch that is always automatic, which would erase the
+  very thing being remembered.
+- A restore skips the write when the machine is already in that state, so the
+  authorisation prompt appears only when something would actually change.
+  Writes need root — measured: an unprivileged write fails with
+  `SMCWriteKey() = e00002c1` (not privileged).
+
+Measured end to end on an M2: fans handed back to the system (`Mode: auto`),
+setting armed, app relaunched → `Mode: forced`, target 7199.
+
 ### App bundle and DMG
 
 ```sh

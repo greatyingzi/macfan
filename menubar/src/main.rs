@@ -23,7 +23,7 @@ mod settings;
 mod style;
 mod window;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::Command;
 use std::time::Instant;
 
@@ -45,7 +45,7 @@ use macfan::fan::{self, Action};
 use macfan::smc::Smc;
 
 use i18n::{Lang, Strings};
-use settings::{Settings, TitleContent, DEFAULT_PRESETS};
+use settings::{LastState, Settings, TitleContent, DEFAULT_PRESETS};
 use style::Slot;
 
 const REFRESH_SECONDS: f64 = 2.0;
@@ -81,6 +81,7 @@ const TAG_SET_DOCK_ICON: isize = 21;
 const TAG_SET_LAUNCH_LOGIN: isize = 22;
 const TAG_SET_START_MINIMIZED: isize = 23;
 const TAG_SET_TITLE_ICON: isize = 24;
+const TAG_SET_RESTORE_LAST: isize = 25;
 
 /// A sensor family shown in the menu: its keys (discovered once, they do not
 /// change while the machine is up), its own smoothing, and its menu row.
@@ -135,6 +136,9 @@ struct Ivars {
     temperature: RefCell<Option<Retained<NSMenuItem>>>,
     /// The sensor families under the temperature row, with their smoothing.
     watched: RefCell<Vec<Watched>>,
+    /// Set at launch, consumed by the first refresh: the restart happens inside
+    /// the run loop, where a modal alert can be shown if the write is refused.
+    pending_restore: Cell<bool>,
 }
 
 define_class!(
@@ -203,6 +207,7 @@ define_class!(
                 match tag {
                     TAG_SET_STATUS_ITEM => settings.show_status_item = on,
                     TAG_SET_TITLE_ICON => settings.title_icon = on,
+                    TAG_SET_RESTORE_LAST => settings.restore_last = on,
                     TAG_SET_DOCK_ICON => settings.show_dock_icon = on,
                     TAG_SET_LAUNCH_LOGIN => {
                         // Derived from the plist, not stored: this one is not a
@@ -343,6 +348,10 @@ impl Controller {
     }
 
     fn refresh(&self) {
+        if self.ivars().pending_restore.get() {
+            self.ivars().pending_restore.set(false);
+            self.restore_startup_state();
+        }
         let s = self.strings();
         let settings = self.ivars().settings.borrow().clone();
         let cpu_temp = self.refresh_temperatures(s);
@@ -464,6 +473,7 @@ impl Controller {
             let on = match check.tag() {
                 TAG_SET_STATUS_ITEM => settings.show_status_item,
                 TAG_SET_TITLE_ICON => settings.title_icon,
+                TAG_SET_RESTORE_LAST => settings.restore_last,
                 TAG_SET_DOCK_ICON => settings.show_dock_icon,
                 TAG_SET_LAUNCH_LOGIN => login_item::is_enabled(),
                 TAG_SET_START_MINIMIZED => settings.start_minimized,
@@ -570,6 +580,53 @@ impl Controller {
         self.apply(Action::Set(rpm), &["set", &arg]);
     }
 
+    /// Remember what was just applied, so a later launch can put it back.
+    ///
+    /// Only our own writes are remembered: the state the SMC reports at launch is
+    /// always automatic (sleep and reboot hand the fans back), so learning from
+    /// observation would erase the very thing being remembered.
+    fn remember(&self, action: Action) {
+        let state = match action {
+            Action::Max => LastState::Max,
+            Action::Min => LastState::Min,
+            Action::Auto => LastState::Auto,
+            Action::Set(rpm) => LastState::Preset(rpm),
+        };
+        let to_save = {
+            let mut settings = self.ivars().settings.borrow_mut();
+            if settings.last_state == Some(state) {
+                return;
+            }
+            settings.last_state = Some(state);
+            settings.clone()
+        };
+        let _ = to_save.save();
+    }
+
+    /// Put the remembered setting back at launch, if the user asked for it.
+    ///
+    /// Skipped when the machine is already in that state: nothing would change,
+    /// and a write is what brings up the authorisation prompt.
+    fn restore_startup_state(&self) {
+        if std::env::args().any(|a| a == "--selftest") {
+            return;
+        }
+        let Some(state) = self.ivars().settings.borrow().startup_state() else {
+            return;
+        };
+        let fans = read_fans_or_empty();
+        let current = current_mode(&fans, &self.ivars().settings.borrow().presets);
+        if mode_matches(state, current) {
+            return;
+        }
+        match state {
+            LastState::Auto => self.write(Action::Auto),
+            LastState::Max => self.write(Action::Max),
+            LastState::Min => self.write(Action::Min),
+            LastState::Preset(rpm) => self.write(Action::Set(rpm)),
+        }
+    }
+
     /// Run the command, then check the SMC actually followed: the write is
     /// asynchronous, so "the helper exited 0" alone means very little.
     fn apply(&self, action: Action, args: &[&str]) {
@@ -581,6 +638,7 @@ impl Controller {
             alert.addButtonWithTitle(&NSString::from_str(s.ok));
             alert.runModal();
         }
+        self.remember(action);
         self.refresh();
         let after = read_fans_or_empty();
         if !before.is_empty() && !after.is_empty() && !fan::satisfied(action, &before, &after) {
@@ -787,6 +845,18 @@ fn temperature_title(s: &Strings, cpu: Option<(f64, f64)>) -> Retained<NSMutable
         pieces.push((format!("   {} {peak:.0}°C", s.peak_label), Slot::Muted));
     }
     style::attributed(&pieces)
+}
+
+/// Whether a remembered setting is already in force, so a launch can skip the
+/// write (and the authorisation prompt that comes with it).
+fn mode_matches(state: LastState, mode: Mode) -> bool {
+    match (state, mode) {
+        (LastState::Auto, Mode::Auto) => true,
+        (LastState::Max, Mode::Max) => true,
+        (LastState::Min, Mode::Min) => true,
+        (LastState::Preset(wanted), Mode::Preset(current)) => wanted == current,
+        _ => false,
+    }
 }
 
 /// Human-readable name of a mode, shared by the menu's state line and the
@@ -1086,7 +1156,7 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
     let parse_ok = passed == cases.len();
     println!("selftest: parse_rpm = {passed}/{} cases", cases.len());
 
-    // Settings window: five checkboxes and the content popup, all wired.
+    // Settings window: six checkboxes and the content popup, all wired.
     let checks = controller.ivars().checks.borrow();
     let check_titles: Vec<String> = checks.iter().map(|c| c.title().to_string()).collect();
     let content_entries = controller
@@ -1097,7 +1167,7 @@ fn selftest(controller: &Controller, menu: &NSMenu) {
         .map(|popup| (0..popup.numberOfItems()).count())
         .unwrap_or(0);
     let settings_window_ok = controller.ivars().window.borrow().is_some()
-        && checks.len() == 5
+        && checks.len() == 6
         && content_entries == TitleContent::all().len()
         && checks
             .iter()
@@ -1436,6 +1506,10 @@ fn main() {
     *controller.ivars().language_popup.borrow_mut() = Some(settings_window.language_popup);
     *controller.ivars().subtitle.borrow_mut() = Some(settings_window.subtitle);
 
+    // The remembered setting goes back on the first refresh, i.e. inside the run
+    // loop, so a refused write can surface as an alert rather than vanishing.
+    controller.ivars().pending_restore.set(true);
+
     let status_bar = NSStatusBar::systemStatusBar();
     let status_item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
     let symbol = status_item_image(title_content);
@@ -1607,6 +1681,21 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_remembered_setting_is_recognised_when_it_is_already_in_force() {
+        // The launch restore skips the write when nothing would change, and a
+        // write is what brings up the authorisation prompt.
+        assert!(mode_matches(LastState::Auto, Mode::Auto));
+        assert!(mode_matches(LastState::Max, Mode::Max));
+        assert!(mode_matches(LastState::Min, Mode::Min));
+        assert!(mode_matches(LastState::Preset(4500), Mode::Preset(4500)));
+        assert!(!mode_matches(LastState::Preset(4500), Mode::Preset(3000)));
+        assert!(!mode_matches(LastState::Max, Mode::Auto));
+        assert!(!mode_matches(LastState::Auto, Mode::Max));
+        // A custom speed is not a preset, and vice versa.
+        assert!(!mode_matches(LastState::Preset(4321), Mode::Custom(4321)));
+    }
 
     #[test]
     fn shell_quoting_survives_awkward_paths() {

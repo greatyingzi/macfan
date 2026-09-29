@@ -18,12 +18,12 @@ use objc2_foundation::{MainThreadMarker, NSObjectProtocol, NSPoint, NSRect, NSSi
 use crate::i18n::{Lang, Strings};
 use crate::settings::{TitleContent, DEFAULT_PRESETS};
 use crate::{
-    TAG_SET_DOCK_ICON, TAG_SET_LAUNCH_LOGIN, TAG_SET_START_MINIMIZED, TAG_SET_STATUS_ITEM,
-    TAG_SET_TITLE_ICON,
+    TAG_SET_DOCK_ICON, TAG_SET_LAUNCH_LOGIN, TAG_SET_RESTORE_LAST, TAG_SET_START_MINIMIZED,
+    TAG_SET_STATUS_ITEM, TAG_SET_TITLE_ICON,
 };
 
 const WIDTH: f64 = 480.0;
-const HEIGHT: f64 = 560.0; // one more row than the three-style layout had
+const HEIGHT: f64 = 590.0; // one more row than the three-style layout had
 const MARGIN: f64 = 22.0;
 const ROW_HEIGHT: f64 = 24.0;
 const ROW_GAP: f64 = 6.0;
@@ -35,7 +35,7 @@ const LABEL_WIDTH: f64 = 96.0;
 pub struct SettingsWindow {
     /// The window itself.
     pub window: Retained<NSWindow>,
-    /// The five checkboxes, in display order.
+    /// The six checkboxes, in display order.
     pub checks: Vec<Retained<NSButton>>,
     /// The three preset speed fields.
     pub preset_fields: Vec<Retained<NSTextField>>,
@@ -148,7 +148,7 @@ pub fn build<T: NSObjectProtocol + 'static>(
     y -= SECTION_GAP;
     header(s.section_menu_bar, y);
     y -= ROW_HEIGHT + ROW_GAP;
-    let mut checks = Vec::with_capacity(5);
+    let mut checks = Vec::with_capacity(6);
     checks.push(checkbox(s.show_status_item, TAG_SET_STATUS_ITEM, y));
 
     // Two independent choices, not one list that mixes them: what the number
@@ -179,6 +179,8 @@ pub fn build<T: NSObjectProtocol + 'static>(
     checks.push(checkbox(s.launch_at_login, TAG_SET_LAUNCH_LOGIN, y));
     y -= ROW_HEIGHT + ROW_GAP;
     checks.push(checkbox(s.start_minimized, TAG_SET_START_MINIMIZED, y));
+    y -= ROW_HEIGHT + ROW_GAP;
+    checks.push(checkbox(s.restore_last_label, TAG_SET_RESTORE_LAST, y));
 
     // --- presets ----------------------------------------------------------
     y -= ROW_HEIGHT + SECTION_GAP;

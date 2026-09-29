@@ -129,6 +129,8 @@ pub struct Strings {
     pub content_temp: &'static str,
     /// Checkbox: put a glyph next to the title.
     pub title_icon_label: &'static str,
+    /// Checkbox: put the last fan setting back at launch.
+    pub restore_last_label: &'static str,
     /// Label above the language popup.
     pub language_label: &'static str,
     /// Language option: follow the system.
@@ -198,6 +200,7 @@ const EN: Strings = Strings {
     content_speed: "Speed",
     content_temp: "Temperature",
     title_icon_label: "Icon in the title",
+    restore_last_label: "Restore the last speed at launch (may ask for authorisation once)",
     language_label: "Language (next launch)",
     language_system: "Follow system",
     section_menu_bar: "MENU BAR",
@@ -245,6 +248,7 @@ const ZH_HANS: Strings = Strings {
     content_speed: "转速",
     content_temp: "温度",
     title_icon_label: "标题带图标",
+    restore_last_label: "启动时恢复上次的转速设定（可能请求一次授权）",
     language_label: "语言（下次启动生效）",
     language_system: "跟随系统",
     section_menu_bar: "菜单栏",
@@ -292,6 +296,7 @@ const ZH_HANT: Strings = Strings {
     content_speed: "轉速",
     content_temp: "溫度",
     title_icon_label: "標題帶圖示",
+    restore_last_label: "啟動時恢復上次的轉速設定（可能請求一次授權）",
     language_label: "語言（下次啟動生效）",
     language_system: "跟隨系統",
     section_menu_bar: "選單列",
@@ -339,6 +344,7 @@ const JA: Strings = Strings {
     content_speed: "回転数",
     content_temp: "温度",
     title_icon_label: "タイトルにアイコン",
+    restore_last_label: "起動時に前回の回転数設定を復元（初回に承認を求める場合があります）",
     language_label: "言語（次回起動時に反映）",
     language_system: "システムに従う",
     section_menu_bar: "メニューバー",
@@ -548,6 +554,7 @@ mod tests {
                 s.content_speed,
                 s.content_temp,
                 s.title_icon_label,
+                s.restore_last_label,
                 s.language_label,
                 s.language_system,
                 s.section_menu_bar,
