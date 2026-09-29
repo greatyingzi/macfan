@@ -10,9 +10,13 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # Re-running a release (for example to bump the cask step) is explicit rather
-  # than a side effect of pushing anything.
+  # Re-running the cask step for a version, without cutting a new tag: the build
+  # steps below are skipped, only the cask sync runs.
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to sync the cask to (e.g. 0.2.6)"
+        required: true
 
 permissions:
   contents: write
@@ -23,7 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Build universal binaries
+      - if: startsWith(github.ref, 'refs/tags/')
+        name: Build universal binaries
         run: |
           rustup target add x86_64-apple-darwin
           cargo build --profile dist --target aarch64-apple-darwin
@@ -36,13 +41,15 @@ jobs:
             echo "  $b: $(lipo -archs dist/$b)"
           done
 
-      - name: Smoke test
+      - if: startsWith(github.ref, 'refs/tags/')
+        name: Smoke test
         run: |
           ./dist/macfan --version
           ./dist/rsmc -v
           ./dist/macfan --help > /dev/null
 
-      - name: App bundle and DMG
+      - if: startsWith(github.ref, 'refs/tags/')
+        name: App bundle and DMG
         run: |
           cargo build --release
           ( cd menubar && cargo build --release )
@@ -50,7 +57,8 @@ jobs:
           menubar/scripts/make-dmg.sh
           lipo -archs dist/macfan.app/Contents/MacOS/macfan-menubar
 
-      - name: Package
+      - if: startsWith(github.ref, 'refs/tags/')
+        name: Package
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p pkg/macfan-universal
@@ -65,10 +73,11 @@ jobs:
             "macfan-${VERSION}-macos-universal" "rsmc-${VERSION}-macos-universal" > SHA256SUMS
           cat SHA256SUMS
 
-      - name: Publish
+      - if: startsWith(github.ref, 'refs/tags/')
+        name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
           V="${VERSION#v}"
@@ -87,7 +96,7 @@ jobs:
       - name: Update the Homebrew cask
         env:
           TAP_DEPLOY_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           set -euo pipefail
           V="${VERSION#v}"
