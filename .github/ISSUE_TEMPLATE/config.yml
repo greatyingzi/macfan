@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Install or upgrade problem
+    url: https://github.com/greatyingzi/homebrew-tap/issues
+    about: Failures coming out of the Homebrew cask belong to the tap, not to the app.

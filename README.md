@@ -52,7 +52,9 @@ M2 MacBook Pro. Donating unlocks nothing.
 What helps more than money: **report what does not work** — a machine where
 `macfan status` prints the wrong speed, a key that reads `unreadable`, fans that
 never settle — or try it on hardware this project has never seen. Intel Macs and
-desktops are untested.
+desktops are untested. Reports belong in
+[issues](https://github.com/greatyingzi/macfan/issues/new/choose); one from a
+machine this project has never seen is worth more than a tip.
 
 ## Menu bar app
 

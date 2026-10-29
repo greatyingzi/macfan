@@ -47,6 +47,7 @@ macfan 免费，并且打算一直免费：无遥测、无账号、不把功能�
 
 比钱更有用的事：**报告不工作的地方** —— 某台机器上 `macfan status` 转速不对、某个键读出
 `unreadable`、风扇始终落不到目标值；或者在没被验证过的硬件上试一下，Intel Mac 和台式机都还没测。
+报到 [issues](https://github.com/greatyingzi/macfan/issues/new/choose)：一台没验证过的机器上的反馈，比一笔打赏有用。
 
 ## 菜单栏应用
 

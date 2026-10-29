@@ -1,0 +1,52 @@
+name: Bug report
+description: A fan does not follow, a temperature reads wrong, or the app misbehaves.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fan behaviour depends on the exact machine, so the model and the command
+        output below decide whether this is a bug or a quirk of this Mac's SMC.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What it shows, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Command output
+      description: "`macfan status` and `macfan temps --all` — or the app's readout, as text."
+      render: console
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Mac model
+      description: "`system_profiler SPHardwareDataType | grep -E 'Model Name|Chip|Model Identifier'`"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: macfan version and macOS version
+      description: "`macfan --version`, `sw_vers -productVersion`"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - Homebrew cask
+        - Release tarball / install.sh
+        - Built from source
+  - type: checkboxes
+    id: permissions
+    attributes:
+      label: Permissions
+      options:
+        - label: The CLI was run with sudo (SMC writes require root)
